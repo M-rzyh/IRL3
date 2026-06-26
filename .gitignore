@@ -1,0 +1,21 @@
+# Run outputs / logs (the ~1.3G bulk — kept in $HOME, not pushed)
+imitation/output/
+output/
+**/slurm_logs/
+**/sacred/
+*.out
+wandb/
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+# Editor / agent local state
+.claude/
+.vscode/
+.idea/
+# Heavy binaries / archives
+*.tar.gz
+*.zip
+*.mp4
+*.ckpt
