@@ -22,12 +22,12 @@ source /scratch/marzii/miniforge3/etc/profile.d/conda.sh
 conda activate /scratch/marzii/envs/imitation-gail
 hash -r
 
+# Use local IRL3 source
+export PYTHONPATH="/home/marzii/IRL3/imitation/src:${PYTHONPATH:-}"
+
 which python
 python -c "import sys; print(sys.executable)"
 python -c "import imitation; print('imitation', imitation.__version__)"
-
-# Use local IRL3 source
-export PYTHONPATH="/home/marzii/IRL3/imitation/src:${PYTHONPATH:-}"
 
 # ---- sanity check ----
 python - <<'PY'
