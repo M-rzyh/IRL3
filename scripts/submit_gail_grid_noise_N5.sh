@@ -25,7 +25,8 @@ cd /home/marzii/IRL3/imitation
 
 submit_one () {
   local cond_id="$1" n_demos="$2" noise_pct="$3" seed="$4" demo_path="$5" shuffle="$6"
-  local bs=512   # small-N batch size (matches count-axis N=5 setting)
+  local bs=128   # demo_batch_size: must be <= 5-demo transitions; high-noise demos are
+                 # short (~460 transitions at 100%), so 512 failed there. 128 fits all levels.
   local jobid
   jobid=$(DEMO_PATH="$demo_path" \
           N_DEMOS="$n_demos" \
