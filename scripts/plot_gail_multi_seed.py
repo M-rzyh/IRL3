@@ -9,6 +9,11 @@ Usage:
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from figures_dir import fig_path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -96,8 +101,9 @@ def main():
         ymin, ymax = (float(v) for v in args.ylim.split(","))
         ax.set_ylim(ymin, ymax)
     fig.tight_layout()
-    fig.savefig(args.output, dpi=150)
-    print(f"\nSaved: {args.output}")
+    out = fig_path(args.output)
+    fig.savefig(out, dpi=150)
+    print(f"\nSaved: {out}")
 
 
 if __name__ == "__main__":

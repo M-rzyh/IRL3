@@ -14,6 +14,11 @@ Optionally limit to specific GAIL job IDs via --job-ids (comma-separated).
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from figures_dir import fig_path
 import glob
 import json
 import os
@@ -188,7 +193,7 @@ def main():
     fig.tight_layout()
 
     safe_filter = (args.filter.replace("/", "_") if args.filter else "runs")
-    out = args.output or f"gail_curves_{safe_filter}.png"
+    out = fig_path(args.output or f"gail_curves_{safe_filter}.png")
     fig.savefig(out, dpi=150)
     print(f"\nSaved: {out}")
 

@@ -176,7 +176,8 @@ def make_scatter(data, x_key, xlabel, title, out_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", help="JSON config file listing runs")
-    parser.add_argument("--output-dir", default=".", help="Directory for output PNGs")
+    parser.add_argument("--output-dir", default="/home/marzii/IRL3/figures",
+                        help="Directory for output PNGs")
     parser.add_argument("--timing-mode", choices=["wallclock", "totalcpu"],
                         default="totalcpu",
                         help="wallclock: Elapsed wall-clock from run.json / train.csv duration. "
