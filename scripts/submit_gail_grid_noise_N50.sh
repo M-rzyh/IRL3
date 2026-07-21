@@ -1,6 +1,6 @@
 #!/bin/bash
 # LOW-BUDGET noise axis: N=5 demos, noise ∈ {10..90}%, 30 seeds, online nonFS
-# demos (expert 4615187). Mirrors submit_gail_grid_noise.sh but N_DEMOS=5 and
+# demos (expert 4615187). Mirrors submit_gail_grid_noise.sh but N_DEMOS=50 and
 # SHUFFLE=1 (each seed draws a random 5-subset from its 100-episode noisy pool,
 # matching how count_N5 subsamples the clean pool).
 #
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 DATE=$(date +%Y-%m-%d)
-INDEX=/home/marzii/IRL3/experiments/gail_grid_noise_N5_${DATE}.csv
+INDEX=/home/marzii/IRL3/experiments/gail_grid_noise_N50_${DATE}.csv
 mkdir -p "$(dirname "$INDEX")"
 echo "condition_id,N,noise_pct,seed,slurm_job_id,demo_path,status" > "$INDEX"
 
@@ -25,7 +25,7 @@ cd /home/marzii/IRL3/imitation
 
 submit_one () {
   local cond_id="$1" n_demos="$2" noise_pct="$3" seed="$4" demo_path="$5" shuffle="$6"
-  local bs=128   # demo_batch_size: must be <= 5-demo transitions; high-noise demos are
+  local bs=512   # demo_batch_size: must be <= 5-demo transitions; high-noise demos are
                  # short (~460 transitions at 100%), so 512 failed there. 128 fits all levels.
   local jobid
   jobid=$(DEMO_PATH="$demo_path" \
@@ -42,9 +42,9 @@ submit_one () {
 
 echo "=== Low-budget noise axis (N=5, varying noise) ==="
 for noise in "${noise_axis_pct[@]}"; do
-  cond="noise_N5_p${noise}"
+  cond="noise_N50_p${noise}"
   for seed in {0..29}; do
-    submit_one "$cond" 5 "$noise" "$seed" "$DEMO_ROOT/n100_p${noise}_s${seed}" 1
+    submit_one "$cond" 50 "$noise" "$seed" "$DEMO_ROOT/n100_p${noise}_s${seed}" 1
   done
 done
 
