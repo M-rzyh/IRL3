@@ -32,10 +32,10 @@
 #   coin_uniform + FS    -> noisy_demos_online_FS/lunarlander/expert_4720242/n100_p{P}_s{S}
 #   other variant (nonFS)-> noise_variants/demos/${MODE}/n100_p{P}_s{S}
 #
-# EXAMPLES:
-#   sbatch generate_noise_demo_pools.sh                          # default: nonFS coin_uniform
-#   MODE=exact_exclude sbatch generate_noise_demo_pools.sh       # nonFS anti-signal variant
-#   FS=1 sbatch generate_noise_demo_pools.sh                     # FS coin_uniform
+# EXAMPLES (run from the repo root):
+#   sbatch scripts/pool_generators/generate_online_noisy_demo_pools.sh            # nonFS coin_uniform
+#   MODE=exact_exclude sbatch scripts/pool_generators/generate_online_noisy_demo_pools.sh  # nonFS anti-signal
+#   FS=1 sbatch scripts/pool_generators/generate_online_noisy_demo_pools.sh       # FS coin_uniform
 
 set -euo pipefail
 

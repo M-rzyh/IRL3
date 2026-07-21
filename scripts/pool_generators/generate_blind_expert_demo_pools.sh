@@ -10,7 +10,7 @@
 # non-frame-skip expert 4615187. On blanked frames the expert is fed a zeroed
 # obs -> acts blind -> degraded, physically-consistent 8-D demos. New file; does
 # not touch the online-noise collector. Outputs isolated in frame_blanking/.
-#   sbatch scripts/generate_blind_expert_demos.sh [NSEEDS]   (default 5)
+#   sbatch scripts/pool_generators/generate_blind_expert_demo_pools.sh [NSEEDS]   (default 5)
 set -euo pipefail
 
 PYTHON=/scratch/marzii/envs/imitation-gail/bin/python
