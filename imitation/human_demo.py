@@ -28,6 +28,7 @@ Controls (all modes):
     Q         : save all & quit
 """
 
+import collections
 import os
 import sys
 import time
@@ -107,6 +108,7 @@ _WEB_HTML = """<!DOCTYPE html>
          padding: 15px; min-height: 100vh; }
   h2 { margin-bottom: 8px; color: #8cf; }
   #status { font-size: 16px; margin: 8px 0; min-height: 22px; color: #ff0; }
+  #flagcount { font-size: 24px; font-weight: bold; color: #4f4; margin: 4px 0; }
   #frame { border: 2px solid #444; background: #000; display: block; }
   #controls { color: #888; margin: 10px 0; font-size: 13px; }
   .k { background: #282828; padding: 2px 7px; border-radius: 3px;
@@ -119,6 +121,7 @@ _WEB_HTML = """<!DOCTYPE html>
   <h2>LunarLander Demo Collection</h2>
   <div id="alert">Click here first to capture keyboard, then press SPACE to start!</div>
   <div id="status">Connecting...</div>
+  <div id="flagcount">FLAGGED: 0 / 0</div>
   <canvas id="frame" width="600" height="400" style="width:600px; height:400px;"></canvas>
   <div id="controls">
     <span class="k">W</span>/<span class="k">&uarr;</span> up &nbsp;
@@ -126,9 +129,10 @@ _WEB_HTML = """<!DOCTYPE html>
     <span class="k">D</span>/<span class="k">&rarr;</span> right &nbsp;
     <span class="k">S</span>/<span class="k">&darr;</span> coast
     &nbsp;|&nbsp;
-    <span class="k">SPACE</span> end episode &nbsp;
+    <span class="k">SPACE</span> start / keep &nbsp;
+    <span class="k">F</span> include (flag) &nbsp;
     <span class="k">X</span> discard &nbsp;
-    <span class="k">Q</span> quit &amp; save
+    <span class="k">Q</span> finish
   </div>
   <div id="keys">Keys: none</div>
 
@@ -136,6 +140,7 @@ _WEB_HTML = """<!DOCTYPE html>
 const canvas = document.getElementById('frame');
 const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
+const flagEl = document.getElementById('flagcount');
 const keysEl = document.getElementById('keys');
 const alertEl = document.getElementById('alert');
 
@@ -148,7 +153,7 @@ document.addEventListener('click', () => { window.focus(); });
 let keys = new Set();
 document.addEventListener('keydown', e => {
   e.preventDefault();
-  if (['Space','KeyX','KeyQ','Escape'].includes(e.code)) {
+  if (['Space','KeyX','KeyQ','Escape','KeyF'].includes(e.code)) {
     fetch('/special', {method:'POST', body:e.code});
     return;
   }
@@ -187,6 +192,8 @@ setInterval(() => {
       '  |  Reward: ' + d.reward.toFixed(2) +
       '  |  Saved: ' + d.saved +
       '  |  ' + d.msg;
+    flagEl.textContent = 'FLAGGED (F): ' + d.flagged + ' / ' + d.flag_target;
+    flagEl.style.color = (d.flagged >= d.flag_target) ? '#ff0' : '#4f4';
   }).catch(()=>{});
 }, 200);
 </script>
@@ -195,8 +202,46 @@ setInterval(() => {
 """
 
 
-def _run_web(env_id, max_episodes, fps, discrete, seed, port):
-    """Run demo collection with a browser-based UI."""
+def _make_env(env_id, render_mode, gravity=None, enable_wind=False,
+              wind_power=15.0, turbulence_power=1.5):
+    """Build the play env, applying TASK/DYNAMICS options (gravity, wind).
+
+    These differ in kind from the perception/control difficulties (blank, region,
+    sticky, delay): those corrupt the frame or the keypress AROUND a normal env,
+    whereas gravity and wind change the PHYSICS the env is built with, so they are
+    applied here at construction (and they also change the eval task).
+
+      - Wind (gymnasium >= 0.24 only): constructor kwargs enable_wind / wind_power /
+        turbulence_power. Off by default -> any env still constructs unchanged.
+      - Gravity: written to world.gravity AFTER construction, NOT via the kwarg,
+        because the gymnasium constructor asserts -12 < gravity < 0 (so gravity=0,
+        inverted, or crushing gravity are rejected there). The write persists across
+        reset() and bypasses the assert; safe here because human_demo runs a single
+        live env (no pickling / vecenv that would rebuild it from the stored kwargs).
+    """
+    import gymnasium as gym
+    kw = dict(render_mode=render_mode)
+    if enable_wind:
+        kw.update(enable_wind=True, wind_power=float(wind_power),
+                  turbulence_power=float(turbulence_power))
+    env = gym.make(env_id, **kw)
+    if gravity is not None:
+        env.unwrapped.world.gravity = (0.0, float(gravity))
+    return env
+
+
+def _run_web(env_id, max_episodes, fps, discrete, seed, port,
+             blank_mode="none", blank_prob=0.5, blank_k=2, blank_seed=0, block_len=10,
+             region_frac=0.0, region_seed=0, region_outline=None, outline_thickness=3,
+             sticky_p=0.0, sticky_seed=0, delay_k=0,
+             gravity=None, enable_wind=False, wind_power=15.0, turbulence_power=1.5,
+             flag_target=50, auto_quit=False):
+    """Run demo collection with a browser-based UI.
+
+    blank_mode != 'none' blanks displayed frames (frame-blanking difficulty): the
+    human plays partly blind, producing degraded demonstrations. Recorded obs stay
+    the true 8-D state; only the human's view (and hence actions) are affected.
+    """
     import gymnasium as gym
     import threading
     import json
@@ -205,7 +250,73 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
     from socketserver import ThreadingMixIn
     from PIL import Image
 
-    env = gym.make(env_id, render_mode='rgb_array')
+    env = _make_env(env_id, 'rgb_array', gravity=gravity, enable_wind=enable_wind,
+                    wind_power=wind_power, turbulence_power=turbulence_power)
+
+    # --- frame-blanking (difficulty): blank displayed frames so the human plays blind ---
+    _blank_rng = np.random.default_rng(blank_seed)
+    _disp = {"n": 0, "block_on": False}
+
+    def _maybe_blank(fr):
+        if blank_mode == "none":
+            return fr
+        if blank_mode == "deterministic":
+            b = (_disp["n"] % int(blank_k)) == 0
+        elif blank_mode == "block":
+            # sustained blackouts: decide once per block of block_len displayed frames
+            # (contiguous, so it doesn't blend into flicker like per-frame stochastic).
+            if _disp["n"] % int(block_len) == 0:
+                _disp["block_on"] = _blank_rng.random() < float(blank_prob)
+            b = _disp["block_on"]
+        else:  # stochastic (independent per displayed frame)
+            b = _blank_rng.random() < float(blank_prob)
+        _disp["n"] += 1
+        return np.zeros_like(fr) if b else fr
+
+    # --- region masking (difficulty, Sweep 1): one fixed black rectangle over the WHOLE
+    # episode. Area = region_frac*frame (sides scaled by sqrt), location uniform-random per
+    # episode (seeded from region_seed -> reproducible, same box every run). The human plays
+    # with a persistent spatial blind spot; recorded obs stay the true 8-D state. ---
+    _region_rng = np.random.default_rng(region_seed)
+    _region = {"box": None}
+
+    def _new_region_box(fr):
+        if region_frac <= 0.0:
+            _region["box"] = None
+            return
+        H, W = fr.shape[:2]
+        s = float(region_frac) ** 0.5
+        w = max(1, min(W, int(round(s * W))))
+        h = max(1, min(H, int(round(s * H))))
+        x0 = int(_region_rng.integers(0, W - w + 1))
+        y0 = int(_region_rng.integers(0, H - h + 1))
+        _region["box"] = (x0, y0, w, h)
+
+    def _maybe_mask(fr):
+        box = _region["box"]
+        if box is None:
+            return fr
+        x0, y0, w, h = box
+        fr = fr.copy()
+        fr[y0:y0 + h, x0:x0 + w] = 0
+        if region_outline:
+            # Border drawn INSIDE the box, on top of the black fill, so the mask is
+            # distinguishable from the black sky. Occluded pixels are unchanged (the
+            # ring is opaque too, just not black). Cosmetic only.
+            t = max(1, int(outline_thickness))
+            fr[y0:y0 + t,         x0:x0 + w] = region_outline      # top
+            fr[y0 + h - t:y0 + h, x0:x0 + w] = region_outline      # bottom
+            fr[y0:y0 + h, x0:x0 + t]         = region_outline      # left
+            fr[y0:y0 + h, x0 + w - t:x0 + w] = region_outline      # right
+        return fr
+
+    # Control-interface difficulty (sticky / delay). Reset at every episode boundary so state
+    # never leaks across episodes. Recorded actions are the EFFECTIVE ones the env ran.
+    def _noop_action():
+        return 0 if discrete else np.zeros(env.action_space.shape[0], dtype=np.float32)
+
+    _apply_control, _reset_control = make_control_corruptor(
+        sticky_p, sticky_seed, delay_k, _noop_action)
 
     # Shared state between HTTP server and game loop
     lock = threading.Lock()
@@ -216,14 +327,14 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
         'ep': 0, 'max_ep': max_episodes,
         'step': 0, 'reward': 0.0,
         'saved': 0, 'msg': 'Starting...',
+        'flagged': 0, 'flag_target': flag_target,
     }
 
     def encode_frame(frame):
-        # 2x downsample for fast encoding — browser CSS scales it back up
-        small = frame[::2, ::2]
-        img = Image.fromarray(small)
+        # full resolution + higher quality (600x400 JPEG encodes in a few ms)
+        img = Image.fromarray(frame)
         buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=50)
+        img.save(buf, format='JPEG', quality=88)
         return buf.getvalue()
 
     class Handler(BaseHTTPRequestHandler):
@@ -245,7 +356,7 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
             elif self.path == '/status':
                 with lock:
                     info = {k: shared[k] for k in
-                            ('ep','max_ep','step','reward','saved','msg')}
+                            ('ep','max_ep','step','reward','saved','flagged','flag_target','msg')}
                 self._respond(200, 'application/json',
                               json.dumps(info).encode())
             else:
@@ -298,11 +409,17 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
     episodes = []
     ep_times = []
     all_attempts = []  # log ALL episodes (saved + discarded) with timing
+    flags = []         # aligned with `episodes`: True = FLAGGED (to-use this session)
+    n_flagged = 0      # count of flagged episodes; target = flag_target
 
     ep = 0
-    while ep < max_episodes:
+    ep_label = str(max_episodes) if max_episodes > 0 else '∞'
+    while max_episodes <= 0 or ep < max_episodes:   # max_episodes<=0 => unlimited, quit with Q
         obs, _ = env.reset(seed=seed + ep)
         frame = env.render()
+        _new_region_box(frame)          # one fixed mask box for this whole episode
+        _reset_control()                # sticky/delay state does not leak across episodes
+        frame = _maybe_mask(frame)
         with lock:
             shared['frame_bytes'] = encode_frame(frame)
             shared['ep'] = ep + 1
@@ -312,7 +429,7 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
             shared['special'] = None
 
         # --- Wait for SPACE before starting the episode ---
-        print(f"\n  Episode {ep+1}/{max_episodes}  |  Waiting for SPACE to start...")
+        print(f"\n  Episode {ep+1}/{ep_label}  |  Waiting for SPACE to start...")
         waiting = True
         while waiting:
             with lock:
@@ -323,7 +440,7 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
             elif special in ('KeyQ', 'Escape'):
                 env.close()
                 server.shutdown()
-                return episodes, ep_times, all_attempts
+                return episodes, ep_times, all_attempts, flags
             time.sleep(0.05)
 
         ep_start = time.time()
@@ -338,27 +455,12 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
         terminal = False
 
         while not done:
+            t_step = time.perf_counter()   # frame deadline starts HERE, before any work
             with lock:
-                special = shared['special']
-                shared['special'] = None
+                shared['special'] = None    # ignore special keys mid-episode
                 keys = set(shared['pressed_keys'])
-
-            # Handle special keys
-            if special in ('KeyQ', 'Escape'):
-                if len(ep_act) > 0 and not discard:
-                    episodes.append((ep_obs, ep_act, ep_rew, True))
-                    ep_times.append(time.time() - ep_start)
-                with lock:
-                    shared['msg'] = 'Quit — saving...'
-                env.close()
-                server.shutdown()
-                return episodes, ep_times, all_attempts
-            elif special == 'KeyX':
-                discard = True
-                break
-            elif special == 'Space':
-                done = True
-                break
+            # No mid-episode controls: the episode runs until it terminates on its own
+            # (land / crash / truncate); the flag-or-keep decision happens afterwards.
 
             # Map held keys to action (no key = action 0 = coast/do nothing)
             if discrete:
@@ -382,34 +484,43 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
                     if act_dim > 1:
                         action[1] = 1.0
 
-            next_obs, reward, terminated, truncated, info = env.step(action)
-            ep_act.append(action if discrete else action.copy())
+            # Corrupt the control loop (sticky / delay). No-op when both are off.
+            # The human's key becomes `action`; what the lander actually runs is `eff_action`.
+            eff_action = _apply_control(action)
+
+            next_obs, reward, terminated, truncated, info = env.step(eff_action)
+            # Record the EFFECTIVE action: a demo must be a consistent (s, a, s') sequence,
+            # so it stores what the env ran, not the key the human pressed.
+            ep_act.append(eff_action if discrete else np.asarray(eff_action).copy())
             ep_rew.append(reward)
             obs = next_obs
             ep_obs.append(obs.copy())
             step += 1
             ep_reward += reward
 
-            # Render + encode every 2nd step to save CPU
-            if step % 2 == 0:
-                frame = env.render()
-                with lock:
-                    shared['frame_bytes'] = encode_frame(frame)
-                    shared['step'] = step
-                    shared['reward'] = ep_reward
-            else:
-                with lock:
-                    shared['step'] = step
-                    shared['reward'] = ep_reward
+            # Render + encode every step (smoother playback)
+            frame = _maybe_mask(_maybe_blank(env.render()))
+            with lock:
+                shared['frame_bytes'] = encode_frame(frame)
+                shared['step'] = step
+                shared['reward'] = ep_reward
 
             if terminated or truncated:
                 terminal = terminated
                 done = True
 
-            time.sleep(1.0 / fps)
+            # Sleep to a DEADLINE, not a fixed pad: the step+render+encode cost is absorbed
+            # into the frame budget instead of added on top. Without this, achieved rate is
+            # `1/(1/fps + overhead)` and the overhead depends on what is on screen — a blanked
+            # frame is ~4 KB of JPEG vs ~196 KB, so blanking silently sped the game up (the
+            # b=10 human blanking confound). Now requested fps == achieved steps/s.
+            time.sleep(max(0.0, (1.0 / fps) - (time.perf_counter() - t_step)))
 
         ep_end = time.time()
 
+        # NOTE: dead branch in web mode — `discard` is initialised False above and never set
+        # True here (mid-episode keys are ignored; X is handled in the deciding block below).
+        # Kept because _run_visual/_run_curses share the same shape. Do not rely on it.
         if discard:
             all_attempts.append({
                 'status': 'discarded_during',
@@ -424,43 +535,60 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
             continue
 
         if len(ep_act) > 0:
-            # Ask user whether to save or discard this episode
+            # Save-all with flagging: F = save & FLAG (use this session), SPACE = save
+            # (kept but not flagged), X = discard. Every non-discarded episode is saved.
             with lock:
-                shared['msg'] = (f'Episode done: {step} steps, reward={ep_reward:+.2f}'
-                                 f'  |  SPACE=save  X=discard')
-            print(f"  Episode {ep+1}: {step} steps, reward={ep_reward:+.2f}  — save or discard?")
+                shared['msg'] = (f'Episode done: {step} steps, reward={ep_reward:+.2f}  |  '
+                                 f'F=INCLUDE  SPACE=keep(not incl.)  X=discard  Q=finish  |  '
+                                 f'flagged {n_flagged}/{flag_target}')
+            print(f"  Episode {ep+1}: {step} steps, reward={ep_reward:+.2f}  "
+                  f"— F=include / SPACE=keep / X=discard / Q=finish?")
 
             deciding = True
             save_it = False
+            flag_it = False
             while deciding:
                 with lock:
                     special = shared['special']
                     shared['special'] = None
-                if special == 'Space':
-                    save_it = True
-                    deciding = False
+                if special == 'KeyF':
+                    save_it = True; flag_it = True; deciding = False
+                elif special == 'Space':
+                    save_it = True; deciding = False
                 elif special == 'KeyX':
                     deciding = False
                 elif special in ('KeyQ', 'Escape'):
-                    # Quit without saving this episode
+                    # Quit — everything already collected is saved by main()
                     env.close()
                     server.shutdown()
-                    return episodes, ep_times, all_attempts
+                    return episodes, ep_times, all_attempts, flags
                 time.sleep(0.05)
 
             if save_it:
                 episodes.append((ep_obs, ep_act, ep_rew, terminal))
+                flags.append(flag_it)
                 ep_times.append(ep_end - ep_start)
+                if flag_it:
+                    n_flagged += 1
                 all_attempts.append({
-                    'status': 'saved',
+                    'status': 'flagged' if flag_it else 'saved',
                     'duration_sec': ep_end - ep_start,
                     'reward': ep_reward,
                     'steps': step,
                 })
+                hit_target = n_flagged >= flag_target
+                reached = ('  — TARGET REACHED, finishing' if hit_target and auto_quit else
+                           '  — TARGET REACHED, press Q to finish' if hit_target else '')
                 with lock:
                     shared['saved'] = len(episodes)
-                    shared['msg'] = f'Saved! ({len(episodes)}/{max_episodes})'
-                print(f"  -> Saved ({len(episodes)}/{max_episodes})")
+                    shared['flagged'] = n_flagged
+                    shared['msg'] = (f'{"FLAGGED" if flag_it else "Saved"}!  total {len(episodes)}, '
+                                     f'flagged {n_flagged}/{flag_target}{reached}')
+                print(f"  -> {'FLAGGED' if flag_it else 'Saved'} (total {len(episodes)}, "
+                      f"flagged {n_flagged}/{flag_target})")
+                if hit_target and auto_quit:
+                    print(f"  -> auto-quit: {n_flagged}/{flag_target} flagged.")
+                    break
             else:
                 all_attempts.append({
                     'status': 'discarded_after',
@@ -481,7 +609,7 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port):
         shared['msg'] = 'Done — saving...'
     env.close()
     server.shutdown()
-    return episodes, ep_times, all_attempts
+    return episodes, ep_times, all_attempts, flags
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +1109,173 @@ def save_demos(episodes, ep_times, output_dir, all_attempts=None):
 # CLI
 # ---------------------------------------------------------------------------
 
+def make_control_corruptor(sticky_p, sticky_seed, delay_k, noop_fn):
+    """Control-interface difficulties: corrupt what the human's keypress DOES.
+
+    Unlike blanking/region (which hide the view), these leave the view perfect and break
+    the control loop. Returns `(apply, reset)`.
+
+      sticky_p : repeat the PREVIOUS action with probability p (Machado et al. 2018).
+                 Feels like an unresponsive controller.
+      delay_k  : apply each action k STEPS late, via a FIFO primed with `noop_fn()`.
+                 The human feels k/fps seconds of lag.
+
+    Order per step is sticky THEN delay: an unresponsive controller repeats the last
+    command, and the wire then delays whatever it sent. Both are no-ops at 0.
+
+    Identical semantics are used on the PT side (see the PT repo's example-clip script),
+    so a given (p, k) means the same thing in both arms.
+    """
+    rng = np.random.default_rng(sticky_seed)
+    state = {"prev": None, "queue": None}
+
+    def reset():
+        state["prev"] = None
+        state["queue"] = collections.deque(
+            [noop_fn() for _ in range(delay_k)], maxlen=delay_k) if delay_k > 0 else None
+
+    def apply(action):
+        if sticky_p > 0.0 and state["prev"] is not None and rng.random() < float(sticky_p):
+            action = state["prev"]
+        state["prev"] = action
+        if delay_k > 0:
+            q = state["queue"]
+            out = q.popleft()      # the action issued k steps ago
+            q.append(action)
+            return out
+        return action
+
+    reset()
+    return apply, reset
+
+
+_OUTLINE_COLORS = {
+    'red': (255, 0, 0), 'green': (0, 255, 0), 'blue': (0, 0, 255),
+    'yellow': (255, 255, 0), 'cyan': (0, 255, 255), 'magenta': (255, 0, 255),
+    'white': (255, 255, 255),
+}
+
+
+def _outline_rgb(name, fail):
+    """'red' -> (255,0,0); None -> None. Keeps the CLI colour-name-based like ffmpeg's drawbox."""
+    if not name:
+        return None
+    rgb = _OUTLINE_COLORS.get(str(name).lower())
+    if rgb is None:
+        fail(f"--region-outline must be one of {sorted(_OUTLINE_COLORS)}, got {name!r}.")
+    return rgb
+
+
+def _session_meta(args, episodes, ep_times, dcfg, physics_fps):
+    """Everything needed to know how a demo set was collected — above all, its speed.
+
+    `episodes` are (obs, act, rew, terminal) tuples; one action == one env step, so
+    achieved steps/s = total actions / total wall-clock seconds.
+    """
+    steps = sum(len(a) for _, a, _, _ in episodes)
+    secs = sum(ep_times)
+    achieved = (steps / secs) if secs > 0 else None
+    return {
+        "requested_fps": args.fps,
+        "achieved_steps_per_sec": round(achieved, 3) if achieved else None,
+        "physics_fps": physics_fps,
+        "realtime_factor_requested": round(args.fps / physics_fps, 4),
+        "realtime_factor_achieved": round(achieved / physics_fps, 4) if achieved else None,
+        "difficulty": args.difficulty,
+        "difficulty_pct": args.difficulty_pct,
+        "blank_mode": dcfg["blank_mode"],
+        "blank_prob": dcfg["blank_prob"],
+        "block_len": args.block_len,
+        "blank_seed": args.blank_seed,
+        "region_frac": dcfg["region_frac"],
+        "region_seed": args.region_seed,
+        "region_outline": args.region_outline,
+        "sticky_p": dcfg["sticky_p"],
+        "sticky_seed": args.sticky_seed,
+        "delay_k": dcfg["delay_k"],
+        "gravity": args.gravity,
+        "enable_wind": args.enable_wind,
+        "wind_power": args.wind_power if args.enable_wind else None,
+        "turbulence_power": args.turbulence_power if args.enable_wind else None,
+        "env": args.env,
+        "env_seed": args.seed,
+        "max_episodes": args.max_episodes,
+        "flag_target": args.flag_target,
+        "auto_quit": args.auto_quit,
+        "n_episodes": len(episodes),
+        "total_steps": steps,
+        "total_wallclock_sec": round(secs, 3),
+        "argv": sys.argv,
+    }
+
+
+def _write_session_meta(output_dir, meta):
+    import json
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, "session_meta.json"), "w") as fh:
+        json.dump(meta, fh, indent=2)
+    rf = meta["realtime_factor_achieved"]
+    print(f"  session_meta.json -> {output_dir}  "
+          f"(fps {meta['requested_fps']} requested, "
+          f"{meta['achieved_steps_per_sec']} achieved"
+          + (f" = {rf:.2f}x real time)" if rf else ")"))
+
+
+def _resolve_difficulty(args, fail):
+    """Map --difficulty/--difficulty-pct onto the per-technique _run_web kwargs.
+
+    Returns a dict: blank_mode, blank_prob, region_frac, sticky_p, delay_k.
+
+    --difficulty wins when given; otherwise the legacy per-technique flags are used
+    verbatim, so every command that worked before still works. `fail` is a callable
+    that reports a usage error (argparse's parser.error).
+
+    Two families, deliberately different in kind:
+      PERCEPTION  (blank, region) — hide the view; severity is a percentage.
+      CONTROL     (sticky, delay) — corrupt the keypress; sticky is a probability
+                  (percentage), delay is a whole number of steps (--delay-k), because
+                  "50% of a step" is meaningless.
+    """
+    cfg = dict(blank_mode=args.blank_mode, blank_prob=args.blank_prob,
+               region_frac=args.region_frac, sticky_p=args.sticky_p, delay_k=args.delay_k)
+
+    if args.difficulty == 'none':
+        if args.difficulty_pct:
+            fail('--difficulty-pct given without --difficulty; nothing to apply it to.')
+        return cfg
+
+    # `--delay-k` is the severity knob FOR `--difficulty delay`, so it is not a conflict there.
+    others = {'blank_mode': args.blank_mode != 'none', 'region_frac': args.region_frac > 0.0,
+              'sticky_p': args.sticky_p > 0.0, 'delay_k': args.delay_k > 0}
+    if args.difficulty == 'delay':
+        others.pop('delay_k')
+    if any(others.values()):
+        clash = ', '.join('--' + k.replace('_', '-') for k, v in others.items() if v)
+        fail(f'--difficulty {args.difficulty} conflicts with {clash}; pass one or the other.')
+
+    if args.difficulty == 'delay':
+        if args.difficulty_pct:
+            fail('--difficulty delay takes --delay-k (whole steps), not --difficulty-pct.')
+        if args.delay_k <= 0:
+            fail('--difficulty delay requires --delay-k > 0 (e.g. --delay-k 3).')
+        return cfg   # delay_k already carried through
+
+    pct = args.difficulty_pct
+    if not 0.0 < pct <= 100.0:
+        fail(f'--difficulty {args.difficulty} needs --difficulty-pct in (0, 100], got {pct}.')
+    frac = pct / 100.0
+
+    if args.difficulty == 'blank':
+        cfg.update(blank_mode='block', blank_prob=frac)
+    elif args.difficulty == 'region':
+        cfg.update(region_frac=frac)
+    elif args.difficulty == 'sticky':
+        cfg.update(sticky_p=frac)
+    else:
+        fail(f'unhandled --difficulty {args.difficulty!r}')  # unreachable; argparse restricts
+    return cfg
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Collect human demonstrations for GAIL (imitation library format)")
@@ -988,36 +1283,136 @@ def main():
                         help='Gymnasium environment ID (default: LunarLander-v2)')
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory (default: demos/<env>/human_demos)')
-    parser.add_argument('--max_episodes', type=int, default=20,
-                        help='Max episodes to collect')
-    parser.add_argument('--fps', type=int, default=10,
-                        help='Target FPS for curses mode (default: 10)')
+    parser.add_argument('--max_episodes', type=int, default=0,
+                        help='Max episodes to collect; 0 = unlimited, play until you press Q '
+                             '(default: 0). Discarded (X) attempts do not count.')
+    parser.add_argument('--fps', type=int, default=20,
+                        help='Target env steps per wall-clock second, in web/visual/curses modes '
+                             '(default: 20). LunarLander physics is 50 steps/s, so --fps 20 = 0.40x '
+                             'real time — matching the 20fps PT preference clips. The web loop '
+                             'sleeps to a deadline, so achieved == requested.')
     parser.add_argument('--mode', type=str, choices=['web', 'visual', 'curses', 'text'], default='web',
                         help='Input mode: web (browser UI, default), visual (pygame window), curses (text), text (step-by-step)')
     parser.add_argument('--port', type=int, default=8080,
                         help='Port for web mode (default: 8080)')
     parser.add_argument('--seed', type=int, default=42)
+    # --- Unified difficulty interface (preferred). Resolves onto the per-technique flags
+    # below, which keep working unchanged. Adding a new technique = one `choices` entry
+    # here + one branch in `_resolve_difficulty`. ---
+    parser.add_argument('--difficulty', choices=['none', 'blank', 'region', 'sticky', 'delay'],
+                        default='none',
+                        help="Supervision-difficulty technique (web mode). PERCEPTION: 'blank' = "
+                             "temporal blackouts (uses --block-len); 'region' = one fixed black "
+                             "rectangle per episode. CONTROL: 'sticky' = repeat the previous action "
+                             "w.p. p; 'delay' = apply each action k steps late (uses --delay-k). "
+                             "Severity is --difficulty-pct, except delay which uses --delay-k. "
+                             "Default: none.")
+    parser.add_argument('--difficulty-pct', dest='difficulty_pct', type=float, default=0.0,
+                        help='Severity of --difficulty, in PERCENT (e.g. 25 / 50 / 75). '
+                             'blank -> %% of blocks blacked out; region -> %% of the frame AREA '
+                             'masked; sticky -> %% chance of repeating the previous action. '
+                             'Not used by delay. Ignored when --difficulty=none.')
+    # --- Control-interface difficulties: the view is perfect, the CONTROL is corrupted. ---
+    parser.add_argument('--sticky-p', dest='sticky_p', type=float, default=0.0,
+                        help='Sticky actions: repeat the PREVIOUS action with probability p '
+                             '(0 = off). Feels like an unresponsive controller.')
+    parser.add_argument('--sticky-seed', dest='sticky_seed', type=int, default=0)
+    parser.add_argument('--delay-k', dest='delay_k', type=int, default=0,
+                        help='Action delay: apply each action k STEPS late via a FIFO primed with '
+                             'no-ops (0 = off). The human feels k/fps seconds of lag: at --fps 20, '
+                             'k=3 is 150 ms (clearly laggy, still flyable), k=6 is 300 ms (beyond '
+                             'the ~250 ms human reaction budget).')
+    # --- Frame-blanking difficulty (Exp 1): blank the human's view (web mode) ---
+    # Opt-in; default 'none' = unchanged. Human plays blind on blanked frames -> degraded demos.
+    parser.add_argument('--blank-mode', dest='blank_mode',
+                        choices=['none', 'stochastic', 'deterministic', 'block'], default='none',
+                        help='Blank displayed frames so the human plays partly blind (web mode). '
+                             'block = sustained blackouts (recommended, matches the PT video blanker); '
+                             'stochastic per-frame flickers/blends. Default off.')
+    parser.add_argument('--blank-prob', dest='blank_prob', type=float, default=0.5)
+    parser.add_argument('--blank-k', dest='blank_k', type=int, default=2)
+    parser.add_argument('--block-len', dest='block_len', type=int, default=10,
+                        help='block mode: length of each blackout in displayed frames '
+                             '(live play, so ms depends on frame rate — unlike the 20fps PT clips).')
+    parser.add_argument('--blank-seed', dest='blank_seed', type=int, default=0)
+    # --- Region masking difficulty (Sweep 1): fixed black rectangle over the whole episode ---
+    # Opt-in; default 0.0 = unchanged. Spatial twin of blanking: area=frac*frame, location
+    # uniform-random per episode (seeded), constant within the episode.
+    parser.add_argument('--region-frac', dest='region_frac', type=float, default=0.0,
+                        help='Fraction of the frame AREA masked by a fixed black box (web mode): '
+                             '0.25/0.5/0.75. Location random-per-episode (seeded). Default 0 = off.')
+    parser.add_argument('--region-seed', dest='region_seed', type=int, default=0)
+    parser.add_argument('--region-outline', dest='region_outline', type=str, default=None,
+                        metavar='COLOR',
+                        help="Draw a coloured border inside the masked box (e.g. 'red') so it is "
+                             "distinguishable from the black sky. Cosmetic: the occluded pixels "
+                             "are unchanged. Default None = no outline.")
+    parser.add_argument('--outline-thickness', dest='outline_thickness', type=int, default=3)
+    # --- Task/dynamics difficulties (LunarLander): change the PHYSICS, not the view/keys. ---
+    # Unlike the perception/control flags above, these alter the underlying task (and the eval
+    # task too). Opt-in; defaults leave the env unchanged. Applied in _make_env at construction.
+    parser.add_argument('--gravity', type=float, default=None, metavar='G',
+                        help='LunarLander gravity (world units/s^2; env default -10). Applied by '
+                             'writing world.gravity, so unlike the constructor kwarg it accepts '
+                             'the FULL range incl. 0 (e.g. -3 easy, 0 = zero-g float, -12 hard). '
+                             'Default None = unchanged.')
+    parser.add_argument('--enable-wind', dest='enable_wind', action='store_true',
+                        help='Turn on LunarLander wind + turbulence (gymnasium only). Off by '
+                             'default = no wind. A steady, slowly-oscillating sideways push '
+                             '(--wind-power) plus a tipping torque (--turbulence-power).')
+    parser.add_argument('--wind-power', dest='wind_power', type=float, default=15.0,
+                        help='Max linear wind force when --enable-wind (recommended 0-20, default '
+                             '15 = up to ~0.3x gravity of sideways accel). Ignored without '
+                             '--enable-wind.')
+    parser.add_argument('--turbulence-power', dest='turbulence_power', type=float, default=1.5,
+                        help='Max rotational wind (turbulence) when --enable-wind (recommended '
+                             '0-2, default 1.5). This is what mostly makes the lander tip. '
+                             'Ignored without --enable-wind.')
+    parser.add_argument('--flag-target', dest='flag_target', type=int, default=50,
+                        help='web mode: target number of FLAGGED (F-key) episodes; a '
+                             '"target reached" prompt appears at this count. ALL episodes '
+                             '(flagged or not) are saved; flags.json records which are flagged.')
+    parser.add_argument('--auto-quit', dest='auto_quit', action='store_true',
+                        help='web mode: stop as soon as --flag-target episodes are flagged. '
+                             'Default off = keep playing until you press Q (so you can collect a '
+                             'surplus and flag only the best).')
     args = parser.parse_args()
+
+    dcfg = _resolve_difficulty(args, parser.error)
+    outline_rgb = _outline_rgb(args.region_outline, parser.error)
 
     import gymnasium as gym
 
     # Probe env for info display
     probe_env = gym.make(args.env)
     discrete = _is_discrete(probe_env)
+    # The env's own real-time rate (LunarLander: FPS = 50, i.e. one step = 20 ms of game time).
+    physics_fps = int(probe_env.metadata.get('render_fps', 50))
     if discrete:
         print(f"Environment: {args.env}  (obs={probe_env.observation_space.shape[0]}, "
               f"discrete actions: {probe_env.action_space.n})")
     else:
         print(f"Environment: {args.env}  (obs={probe_env.observation_space.shape[0]}, "
               f"act={probe_env.action_space.shape[0]})")
-    print(f"Mode: {args.mode}   Max episodes: {args.max_episodes}")
+    print(f"Mode: {args.mode}   Max episodes: {args.max_episodes or 'unlimited'}")
+    print(f"Speed: --fps {args.fps} vs physics {physics_fps} steps/s "
+          f"=> {args.fps / physics_fps:.2f}x real time")
     probe_env.close()
 
     all_attempts = []
+    flags = None    # web mode fills this in (per-episode flagged bool); other modes: None
 
     if args.mode == 'web':
-        episodes, ep_times, all_attempts = _run_web(
-            args.env, args.max_episodes, args.fps, discrete, args.seed, args.port)
+        episodes, ep_times, all_attempts, flags = _run_web(
+            args.env, args.max_episodes, args.fps, discrete, args.seed, args.port,
+            blank_mode=dcfg["blank_mode"], blank_prob=dcfg["blank_prob"],
+            blank_k=args.blank_k, blank_seed=args.blank_seed, block_len=args.block_len,
+            region_frac=dcfg["region_frac"], region_seed=args.region_seed,
+            region_outline=outline_rgb, outline_thickness=args.outline_thickness,
+            sticky_p=dcfg["sticky_p"], sticky_seed=args.sticky_seed, delay_k=dcfg["delay_k"],
+            gravity=args.gravity, enable_wind=args.enable_wind,
+            wind_power=args.wind_power, turbulence_power=args.turbulence_power,
+            flag_target=args.flag_target, auto_quit=args.auto_quit)
     elif args.mode == 'visual':
         episodes, ep_times = _run_visual(
             args.env, args.max_episodes, args.fps, discrete, args.seed)
@@ -1044,6 +1439,33 @@ def main():
     output_dir = os.path.join(base_dir, f"session_{session}")
 
     save_demos(episodes, ep_times, output_dir, all_attempts=all_attempts)
+
+    # Speed provenance: the fps a session was played at used to live nowhere, so it had to be
+    # reconstructed from timing.csv + shell history. Record requested AND achieved, since the
+    # two differ if anything ever regresses the deadline pacing.
+    meta = _session_meta(args, episodes, ep_times, dcfg, physics_fps)
+    _write_session_meta(output_dir, meta)
+
+    # Flagging (web mode): ALL episodes are saved above; record which are FLAGGED
+    # (to-use) in flags.json, and also write a flagged-only subset for training.
+    if flags is not None:
+        import json
+        flagged_idx = [i for i, f in enumerate(flags) if f]
+        with open(os.path.join(output_dir, "flags.json"), "w") as fh:
+            json.dump({"flagged_indices": flagged_idx, "n_total": len(episodes),
+                       "n_flagged": len(flagged_idx), "flag_target": args.flag_target}, fh, indent=2)
+        print(f"  flags: {len(flagged_idx)}/{len(episodes)} flagged  (flags.json written)")
+        if flagged_idx:
+            save_demos([episodes[i] for i in flagged_idx],
+                       [ep_times[i] for i in flagged_idx], output_dir + "_flagged")
+            # Same meta in the _flagged sibling: that dir is what GAIL trains on, so it must
+            # never be orphaned from the speed it was collected at.
+            _write_session_meta(output_dir + "_flagged",
+                                _session_meta(args, [episodes[i] for i in flagged_idx],
+                                              [ep_times[i] for i in flagged_idx],
+                                              dcfg, physics_fps))
+            print(f"  flagged-only demos -> {output_dir}_flagged  ({len(flagged_idx)} demos)")
+
     print(f"\n  Next run will save to: {os.path.join(base_dir, f'session_{session+1}')}")
 
 
