@@ -33,8 +33,12 @@
 # against a 0.45x clean baseline, which confounded blanking with game speed.
 #
 # CONFIGURATION (env vars):
-#   DIFFICULTY=none|blank|region|sticky|delay   Difficulty technique (default none)
-#     PERCEPTION (hide the view):  blank, region   -> severity from PCT
+#   DIFFICULTY=none|blank|vanish|region|sticky|delay   Difficulty technique (default none)
+#     PERCEPTION (hide the view):  blank, vanish, region   -> severity from PCT
+#       blank  = the WHOLE frame goes black for a block
+#       vanish = same block schedule, but only the LANDER is removed and replaced by the
+#                terrain behind it; ground, pad and flags stay visible. Costs ~13 ms/frame
+#                (27% of the 50 ms budget at FPS=20), so it does not slow the game.
 #     CONTROL    (corrupt the key): sticky         -> severity from PCT
 #                                   delay          -> severity from K (whole steps)
 #   PCT=50                         Severity in PERCENT (blank: % of blocks blacked out;
@@ -55,6 +59,13 @@
 #   TURBULENCE_POWER=1.5           Max rotational wind (0-2) when ENABLE_WIND=1 (dominates the felt difficulty).
 #     NB: a run with GRAVITY set or ENABLE_WIND=1 writes to a SEPARATE dynamics/ output dir, so it
 #     never overwrites the clean human_demos/lunarlander baseline the plot scripts reuse as 0%.
+#   FEEDBACK=reward                What the pilot sees about how the flight went:
+#                                    reward  = running score + episode total (default)
+#                                    outcome = no numbers, just LANDED / CRASHED / OUT OF TIME
+#                                    both    = score AND verdict
+#                                    none    = nothing
+#                                  Only changes the SCREEN. The console log and the saved demo
+#                                  always record the full reward, so no data is lost either way.
 #   MAX_EPISODES=0                 0 = unlimited (play until you press Q)
 #   FLAG_TARGET=50                 How many flagged demos you are aiming for
 #   AUTO_QUIT=0                    1 = stop automatically once FLAG_TARGET is hit
@@ -64,6 +75,7 @@
 # EXAMPLES:
 #   bash collect_human_demos_lunarlander.sh                             # clean 0%
 #   DIFFICULTY=blank  PCT=50 BLOCK_LEN=5 bash collect_human_demos_lunarlander.sh
+#   DIFFICULTY=vanish PCT=50 BLOCK_LEN=5 FLAG_TARGET=15 bash collect_human_demos_lunarlander.sh
 #   DIFFICULTY=region PCT=25 OUTLINE=red bash collect_human_demos_lunarlander.sh
 #   DIFFICULTY=sticky PCT=50             bash collect_human_demos_lunarlander.sh
 #   DIFFICULTY=delay  K=3                bash collect_human_demos_lunarlander.sh
@@ -84,6 +96,7 @@ K=${K:-0}
 BLOCK_LEN=${BLOCK_LEN:-5}
 OUTLINE=${OUTLINE:-}
 FPS=${FPS:-20}
+FEEDBACK=${FEEDBACK:-reward}
 MAX_EPISODES=${MAX_EPISODES:-0}
 FLAG_TARGET=${FLAG_TARGET:-50}
 AUTO_QUIT=${AUTO_QUIT:-0}
@@ -117,10 +130,11 @@ PCT_INT=$(printf '%.0f' "$PCT")
 case "$DIFFICULTY" in
     none)   DEFAULT_OUT="$SCRATCH/imitation_runs/human_demos/lunarlander" ;;
     blank)  DEFAULT_OUT="$SCRATCH/imitation_runs/frame_blanking/demos/human/blank${BLOCK_LEN}_p${PCT_INT}" ;;
+    vanish) DEFAULT_OUT="$SCRATCH/imitation_runs/lander_vanish/demos/human/vanish_p${PCT_INT}" ;;
     region) DEFAULT_OUT="$SCRATCH/imitation_runs/region_mask/demos/human/region${PCT_INT}" ;;
     sticky) DEFAULT_OUT="$SCRATCH/imitation_runs/sticky_actions/demos/human/sticky_p${PCT_INT}" ;;
     delay)  DEFAULT_OUT="$SCRATCH/imitation_runs/action_delay/demos/human/delay_k${K}" ;;
-    *) echo "ERROR: DIFFICULTY must be none|blank|region|sticky|delay, got '$DIFFICULTY'" 1>&2; exit 1 ;;
+    *) echo "ERROR: DIFFICULTY must be none|blank|vanish|region|sticky|delay, got '$DIFFICULTY'" 1>&2; exit 1 ;;
 esac
 # delay's severity is K (whole steps); every other technique's is PCT.
 if [[ "$DIFFICULTY" == "delay" ]]; then
@@ -176,6 +190,9 @@ case "$DIFFICULTY" in
     blank)
         EXTRA+=(--difficulty blank --difficulty-pct "$PCT"
                 --block-len "$BLOCK_LEN" --blank-seed "$BLANK_SEED") ;;
+    vanish)
+        EXTRA+=(--difficulty vanish --difficulty-pct "$PCT"
+                --block-len "$BLOCK_LEN" --blank-seed "$BLANK_SEED") ;;
     region)
         EXTRA+=(--difficulty region --difficulty-pct "$PCT" --region-seed "$REGION_SEED")
         if [[ -n "$OUTLINE" ]]; then EXTRA+=(--region-outline "$OUTLINE"); fi ;;
@@ -199,6 +216,7 @@ echo ""
 case "$DIFFICULTY" in
     none)   DESC="none (clean)" ;;
     blank)  DESC="blank ${PCT}% (block_len=${BLOCK_LEN})" ;;
+    vanish) DESC="lander vanish ${PCT}% (block_len=${BLOCK_LEN}, terrain stays visible)" ;;
     region) DESC="region ${PCT}% of frame area$([[ -n $OUTLINE ]] && echo ", ${OUTLINE} outline")" ;;
     sticky) DESC="sticky actions, p=$(python3 -c "print($PCT/100)")" ;;
     delay)  DESC="action delay, k=${K} steps ($(python3 -c "print(f'{$K*1000/50:.0f}')") ms game time, $(python3 -c "print(f'{$K*1000/$FPS:.0f}')") ms felt at ${FPS} fps)" ;;
@@ -241,6 +259,7 @@ python human_demo.py \
     --max_episodes "$MAX_EPISODES" \
     --flag-target "$FLAG_TARGET" \
     --fps "$FPS" \
+    --feedback "$FEEDBACK" \
     --seed "$SEED" \
     --mode web \
     --port "$PORT" \

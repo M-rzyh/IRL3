@@ -121,6 +121,9 @@ _WEB_HTML = """<!DOCTYPE html>
   <h2>LunarLander Demo Collection</h2>
   <div id="alert">Click here first to capture keyboard, then press SPACE to start!</div>
   <div id="status">Connecting...</div>
+  <!-- Verdict gets its own line so it can be colour-coded and read at a glance; it is blank
+       during flight and only fills in when the episode ends. -->
+  <div id="outcome" style="font-size:1.6em; font-weight:bold; min-height:1.3em;"></div>
   <div id="flagcount">FLAGGED: 0 / 0</div>
   <canvas id="frame" width="600" height="400" style="width:600px; height:400px;"></canvas>
   <div id="controls">
@@ -140,6 +143,7 @@ _WEB_HTML = """<!DOCTYPE html>
 const canvas = document.getElementById('frame');
 const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
+const outcomeEl = document.getElementById('outcome');
 const flagEl = document.getElementById('flagcount');
 const keysEl = document.getElementById('keys');
 const alertEl = document.getElementById('alert');
@@ -189,9 +193,14 @@ setInterval(() => {
     statusEl.textContent =
       'Ep ' + d.ep + '/' + d.max_ep +
       '  |  Step ' + d.step +
-      '  |  Reward: ' + d.reward.toFixed(2) +
+      (d.show_reward ? '  |  Reward: ' + d.reward.toFixed(2) : '') +
       '  |  Saved: ' + d.saved +
       '  |  ' + d.msg;
+    // green = landed, red = crashed, amber = ran out of time. Blank during flight.
+    outcomeEl.textContent = d.outcome || '';
+    outcomeEl.style.color = d.outcome === 'LANDED'  ? '#3f3'
+                          : d.outcome === 'CRASHED' ? '#f44'
+                          : '#fb0';
     flagEl.textContent = 'FLAGGED (F): ' + d.flagged + ' / ' + d.flag_target;
     flagEl.style.color = (d.flagged >= d.flag_target) ? '#ff0' : '#4f4';
   }).catch(()=>{});
@@ -230,8 +239,28 @@ def _make_env(env_id, render_mode, gravity=None, enable_wind=False,
     return env
 
 
+def _outcome_label(ep_rew, terminated, truncated):
+    """How the episode ENDED, in words, with no number attached.
+
+    LunarLander pays exactly +100 on a successful landing and -100 on a crash (or on flying
+    off the side of the screen), so the final step's reward is a clean verdict. A run that
+    hits the time limit ends on neither.
+    """
+    if not ep_rew:
+        return "NO DATA"
+    last = float(ep_rew[-1])
+    if terminated and last >= 99:
+        return "LANDED"
+    if terminated and last <= -99:
+        return "CRASHED"
+    if truncated:
+        return "OUT OF TIME"
+    return "ENDED"
+
+
 def _run_web(env_id, max_episodes, fps, discrete, seed, port,
              blank_mode="none", blank_prob=0.5, blank_k=2, blank_seed=0, block_len=10,
+             blank_style="black", feedback="reward",
              region_frac=0.0, region_seed=0, region_outline=None, outline_thickness=3,
              sticky_p=0.0, sticky_seed=0, delay_k=0,
              gravity=None, enable_wind=False, wind_power=15.0, turbulence_power=1.5,
@@ -241,6 +270,12 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
     blank_mode != 'none' blanks displayed frames (frame-blanking difficulty): the
     human plays partly blind, producing degraded demonstrations. Recorded obs stay
     the true 8-D state; only the human's view (and hence actions) are affected.
+
+    blank_style picks WHAT a blanked frame shows, independently of blank_mode's schedule:
+      'black'  — the whole frame goes dark (original behaviour, the default)
+      'vanish' — only the lander is removed and replaced by the terrain behind it, so the
+                 pilot keeps the ground, pad and flags but loses the craft. This is the
+                 spatially selective variant; see lander_vanish.py.
     """
     import gymnasium as gym
     import threading
@@ -257,6 +292,23 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
     _blank_rng = np.random.default_rng(blank_seed)
     _disp = {"n": 0, "block_on": False}
 
+    # Imported only when needed: it pulls in scipy, which the keyboard/none paths don't want
+    # to pay for. Costs ~13 ms/frame, comfortably inside the 50 ms budget at fps 20.
+    _plate = None
+    if blank_style == "vanish":
+        from lander_vanish import BackgroundPlate
+        _plate = BackgroundPlate()
+
+    def _hide(fr):
+        """Render a blanked frame in the configured style."""
+        return _plate.apply(fr) if _plate is not None else np.zeros_like(fr)
+
+    def _reset_plate():
+        """Terrain is regenerated on reset, so a stale plate would paste the PREVIOUS
+        episode's ground into this one."""
+        if _plate is not None:
+            _plate.reset()
+
     def _maybe_blank(fr):
         if blank_mode == "none":
             return fr
@@ -271,7 +323,12 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
         else:  # stochastic (independent per displayed frame)
             b = _blank_rng.random() < float(blank_prob)
         _disp["n"] += 1
-        return np.zeros_like(fr) if b else fr
+        if b:
+            return _hide(fr)
+        # not blanked: still let the plate learn the background from this frame
+        if _plate is not None:
+            _plate.observe(fr)
+        return fr
 
     # --- region masking (difficulty, Sweep 1): one fixed black rectangle over the WHOLE
     # episode. Area = region_frac*frame (sides scaled by sqrt), location uniform-random per
@@ -326,6 +383,11 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
         'special': None,
         'ep': 0, 'max_ep': max_episodes,
         'step': 0, 'reward': 0.0,
+        # What the pilot is told. 'reward' is the default = previous behaviour, unchanged.
+        # 'outcome' hides the number and reports only LANDED / CRASHED at the end, so the
+        # human judges the flight rather than chasing a score they can read off the screen.
+        'show_reward': feedback in ("reward", "both"),
+        'outcome': '',      # LANDED / CRASHED / OUT OF TIME, set only at episode end
         'saved': 0, 'msg': 'Starting...',
         'flagged': 0, 'flag_target': flag_target,
     }
@@ -356,7 +418,8 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
             elif self.path == '/status':
                 with lock:
                     info = {k: shared[k] for k in
-                            ('ep','max_ep','step','reward','saved','flagged','flag_target','msg')}
+                            ('ep','max_ep','step','reward','saved','flagged','flag_target',
+                             'msg','show_reward','outcome')}
                 self._respond(200, 'application/json',
                               json.dumps(info).encode())
             else:
@@ -419,12 +482,14 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
         frame = env.render()
         _new_region_box(frame)          # one fixed mask box for this whole episode
         _reset_control()                # sticky/delay state does not leak across episodes
+        _reset_plate()                  # terrain is regenerated: never reuse the old plate
         frame = _maybe_mask(frame)
         with lock:
             shared['frame_bytes'] = encode_frame(frame)
             shared['ep'] = ep + 1
             shared['step'] = 0
             shared['reward'] = 0.0
+            shared['outcome'] = ''      # clear last episode's verdict before the next flight
             shared['msg'] = 'Press SPACE to start episode'
             shared['special'] = None
 
@@ -537,11 +602,24 @@ def _run_web(env_id, max_episodes, fps, discrete, seed, port,
         if len(ep_act) > 0:
             # Save-all with flagging: F = save & FLAG (use this session), SPACE = save
             # (kept but not flagged), X = discard. Every non-discarded episode is saved.
+            # What the pilot is told about how it went. The reward number and the
+            # crash/land verdict are independently switchable (--feedback), because a
+            # visible score invites optimising the number instead of flying well, while
+            # a bare LANDED/CRASHED is the judgement we actually want them making.
+            bits = [f'Episode done: {step} steps']
+            if feedback in ("reward", "both"):
+                bits.append(f'reward={ep_reward:+.2f}')
+            head = ', '.join(bits)
+            verdict = _outcome_label(ep_rew, terminal, not terminal)
             with lock:
-                shared['msg'] = (f'Episode done: {step} steps, reward={ep_reward:+.2f}  |  '
+                # The verdict goes to its own colour-coded element, not into `msg`.
+                shared['outcome'] = verdict if feedback in ("outcome", "both") else ''
+                shared['msg'] = (f'{head}  |  '
                                  f'F=INCLUDE  SPACE=keep(not incl.)  X=discard  Q=finish  |  '
                                  f'flagged {n_flagged}/{flag_target}')
-            print(f"  Episode {ep+1}: {step} steps, reward={ep_reward:+.2f}  "
+            # The console always keeps the full record regardless of what the pilot sees —
+            # hiding a number from the UI must not hide it from the run log.
+            print(f"  Episode {ep+1}: {step} steps, reward={ep_reward:+.2f}, {verdict}  "
                   f"— F=include / SPACE=keep / X=discard / Q=finish?")
 
             deciding = True
@@ -1185,6 +1263,8 @@ def _session_meta(args, episodes, ep_times, dcfg, physics_fps):
         "difficulty_pct": args.difficulty_pct,
         "blank_mode": dcfg["blank_mode"],
         "blank_prob": dcfg["blank_prob"],
+        "blank_style": dcfg["blank_style"],
+        "feedback": args.feedback,      # what the pilot could see; affects how they flew
         "block_len": args.block_len,
         "blank_seed": args.blank_seed,
         "region_frac": dcfg["region_frac"],
@@ -1224,19 +1304,20 @@ def _write_session_meta(output_dir, meta):
 def _resolve_difficulty(args, fail):
     """Map --difficulty/--difficulty-pct onto the per-technique _run_web kwargs.
 
-    Returns a dict: blank_mode, blank_prob, region_frac, sticky_p, delay_k.
+    Returns a dict: blank_mode, blank_prob, blank_style, region_frac, sticky_p, delay_k.
 
     --difficulty wins when given; otherwise the legacy per-technique flags are used
     verbatim, so every command that worked before still works. `fail` is a callable
     that reports a usage error (argparse's parser.error).
 
     Two families, deliberately different in kind:
-      PERCEPTION  (blank, region) — hide the view; severity is a percentage.
+      PERCEPTION  (blank, vanish, region) — hide the view; severity is a percentage.
       CONTROL     (sticky, delay) — corrupt the keypress; sticky is a probability
                   (percentage), delay is a whole number of steps (--delay-k), because
                   "50% of a step" is meaningless.
     """
     cfg = dict(blank_mode=args.blank_mode, blank_prob=args.blank_prob,
+               blank_style='black',
                region_frac=args.region_frac, sticky_p=args.sticky_p, delay_k=args.delay_k)
 
     if args.difficulty == 'none':
@@ -1267,6 +1348,10 @@ def _resolve_difficulty(args, fail):
 
     if args.difficulty == 'blank':
         cfg.update(blank_mode='block', blank_prob=frac)
+    elif args.difficulty == 'vanish':
+        # Same block schedule as 'blank' — only the fill differs, so the two are directly
+        # comparable at matched (block_len, pct): identical frames are hidden either way.
+        cfg.update(blank_mode='block', blank_prob=frac, blank_style='vanish')
     elif args.difficulty == 'region':
         cfg.update(region_frac=frac)
     elif args.difficulty == 'sticky':
@@ -1299,17 +1384,28 @@ def main():
     # --- Unified difficulty interface (preferred). Resolves onto the per-technique flags
     # below, which keep working unchanged. Adding a new technique = one `choices` entry
     # here + one branch in `_resolve_difficulty`. ---
-    parser.add_argument('--difficulty', choices=['none', 'blank', 'region', 'sticky', 'delay'],
+    parser.add_argument('--difficulty',
+                        choices=['none', 'blank', 'vanish', 'region', 'sticky', 'delay'],
                         default='none',
                         help="Supervision-difficulty technique (web mode). PERCEPTION: 'blank' = "
-                             "temporal blackouts (uses --block-len); 'region' = one fixed black "
+                             "temporal blackouts (uses --block-len); 'vanish' = same blackout "
+                             "schedule but only the LANDER disappears, terrain stays visible; "
+                             "'region' = one fixed black "
                              "rectangle per episode. CONTROL: 'sticky' = repeat the previous action "
                              "w.p. p; 'delay' = apply each action k steps late (uses --delay-k). "
                              "Severity is --difficulty-pct, except delay which uses --delay-k. "
                              "Default: none.")
+    parser.add_argument('--feedback', choices=['reward', 'outcome', 'both', 'none'],
+                        default='reward',
+                        help="What the pilot is told about how the flight went (web mode). "
+                             "'reward' = the running score plus the episode total (default, "
+                             "unchanged); 'outcome' = no numbers, just LANDED / CRASHED / OUT "
+                             "OF TIME at the end; 'both'; 'none' = no feedback at all. The "
+                             "console log and the saved data always keep the full reward "
+                             "regardless — this only changes what is on screen.")
     parser.add_argument('--difficulty-pct', dest='difficulty_pct', type=float, default=0.0,
                         help='Severity of --difficulty, in PERCENT (e.g. 25 / 50 / 75). '
-                             'blank -> %% of blocks blacked out; region -> %% of the frame AREA '
+                             'blank/vanish -> %% of blocks hidden; region -> %% of the frame AREA '
                              'masked; sticky -> %% chance of repeating the previous action. '
                              'Not used by delay. Ignored when --difficulty=none.')
     # --- Control-interface difficulties: the view is perfect, the CONTROL is corrupted. ---
@@ -1407,6 +1503,7 @@ def main():
             args.env, args.max_episodes, args.fps, discrete, args.seed, args.port,
             blank_mode=dcfg["blank_mode"], blank_prob=dcfg["blank_prob"],
             blank_k=args.blank_k, blank_seed=args.blank_seed, block_len=args.block_len,
+            blank_style=dcfg["blank_style"], feedback=args.feedback,
             region_frac=dcfg["region_frac"], region_seed=args.region_seed,
             region_outline=outline_rgb, outline_thickness=args.outline_thickness,
             sticky_p=dcfg["sticky_p"], sticky_seed=args.sticky_seed, delay_k=dcfg["delay_k"],
