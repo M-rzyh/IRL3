@@ -26,13 +26,13 @@
 #   CHECK=0        1 = pre-flight only (report pool existence, submit nothing)
 #
 # POOL ROUTING (mirrors pool_generators/ so submitter and generator always agree):
-#   level 0 (clean): noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean   (ONE pool,
+#   level 0 (clean): demos/noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean   (ONE pool,
 #                    subsampled per seed via SHUFFLE_SEED — clean is not per-seed)
 #   level>0:
-#     online nonFS coin_uniform -> noisy_demos_online_nonFS/lunarlander/expert_4615187/n100_p{P}_s{S}
-#     online nonFS variant      -> noise_variants/demos/${MODE}/n100_p{P}_s{S}
-#     online FS  coin_uniform   -> noisy_demos_online_FS/lunarlander/expert_4720242/n100_p{P}_s{S}
-#     offline    coin_uniform   -> noisy_demos/lunarlander/expert_${EXPERT}/n100_p{P}_s{S}
+#     online nonFS coin_uniform -> demos/noisy_demos_online_nonFS/lunarlander/expert_4615187/n100_p{P}_s{S}
+#     online nonFS variant      -> demos/noise_variants/demos/${MODE}/n100_p{P}_s{S}
+#     online FS  coin_uniform   -> demos/noisy_demos_online_FS/lunarlander/expert_4720242/n100_p{P}_s{S}
+#     offline    coin_uniform   -> demos/noisy_demos/lunarlander/expert_${EXPERT}/n100_p{P}_s{S}
 #
 # NOTE (0% convention): the 0% GAIL point is the SAME experiment as count_N{N} (clean demos
 # at budget N). To avoid computing it twice, this script's default LEVELS omits 0 — get the
@@ -54,7 +54,7 @@ NSEEDS=${NSEEDS:-30}
 BS=${BS:-}
 CHECK=${CHECK:-0}
 DATE=$(date +%Y-%m-%d)
-INDEX=${INDEX:-/home/marzii/IRL3/experiments/gail_grid_noise_N${N}_${DATE}.csv}
+INDEX=${INDEX:-/home/marzii/IRL3/experiments/GAIL/gail_grid_noise_N${N}_${DATE}.csv}
 
 RUNROOT=/scratch/marzii/imitation_runs
 
@@ -81,15 +81,15 @@ fi
 # ---- pool path for a (level, seed) ----
 # clean (level 0) is one shared pool; noise levels are per-seed pools whose root depends
 # on (PIPELINE, FS, MODE).
-CLEAN_POOL="$RUNROOT/noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean"
+CLEAN_POOL="$RUNROOT/demos/noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean"
 if [[ "$PIPELINE" == "offline" ]]; then
-  NOISE_ROOT="$RUNROOT/noisy_demos/lunarlander/expert_${EXPERT}"
+  NOISE_ROOT="$RUNROOT/demos/noisy_demos/lunarlander/expert_${EXPERT}"
 elif [[ "$MODE" != "coin_uniform" ]]; then
-  NOISE_ROOT="$RUNROOT/noise_variants/demos/${MODE}"
+  NOISE_ROOT="$RUNROOT/demos/noise_variants/demos/${MODE}"
 elif [[ "$FS" == "1" ]]; then
-  NOISE_ROOT="$RUNROOT/noisy_demos_online_FS/lunarlander/expert_4720242"
+  NOISE_ROOT="$RUNROOT/demos/noisy_demos_online_FS/lunarlander/expert_4720242"
 else
-  NOISE_ROOT="$RUNROOT/noisy_demos_online_nonFS/lunarlander/expert_4615187"
+  NOISE_ROOT="$RUNROOT/demos/noisy_demos_online_nonFS/lunarlander/expert_4615187"
 fi
 
 pool_for() {  # $1=level $2=seed  ->  echoes the pool dir

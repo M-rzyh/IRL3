@@ -10,7 +10,7 @@
 set -euo pipefail
 
 DATE=$(date +%Y-%m-%d)
-INDEX=/home/marzii/IRL3/experiments/gail_blind_expert_block_${DATE}.csv
+INDEX=/home/marzii/IRL3/experiments/GAIL/gail_blind_expert_block_${DATE}.csv
 mkdir -p "$(dirname "$INDEX")"
 echo "condition_id,N,blank_pct,seed,slurm_job_id,demo_path,status" > "$INDEX"
 

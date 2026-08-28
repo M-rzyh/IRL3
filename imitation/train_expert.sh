@@ -1,17 +1,17 @@
 #!/bin/bash
 #SBATCH --job-name=walker-ppo
 #SBATCH --account=aip-mtaylor3
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=01:30:00
-#SBATCH --output=output/experts/%j.out
-#SBATCH --error=output/experts/%j.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/expert/walkerwalk/%j.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/expert/walkerwalk/%j.err
 
 set -euo pipefail
 
 # logs directory for slurm output/error files (your current lines are fine)
-mkdir -p output/slurm_logs
+mkdir -p /scratch/marzii/imitation_runs/_slurm_logs/expert/walkerwalk
 
 # ---- required env setup ----
 module --force purge

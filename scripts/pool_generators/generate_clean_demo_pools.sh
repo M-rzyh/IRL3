@@ -24,8 +24,8 @@
 #   FORCE=0        1 = regenerate even if the pool already exists (default: skip)
 #
 # OUTPUT (where the submitters already look):
-#   nonFS -> noisy_demos/lunarlander/expert_4615187/n100_p0_clean
-#   FS    -> noisy_demos/lunarlander/expert_4720242/n100_p0_clean
+#   nonFS -> demos/noisy_demos/lunarlander/expert_4615187/n100_p0_clean
+#   FS    -> demos/noisy_demos/lunarlander/expert_4720242/n100_p0_clean
 #
 # EXAMPLES (run from the repo root):
 #   sbatch scripts/pool_generators/generate_clean_demo_pools.sh            # nonFS clean, skip if present
@@ -43,10 +43,10 @@ FORCE=${FORCE:-0}
 
 if [[ "$FS" == "1" ]]; then
   POLICY=/scratch/marzii/imitation_runs/expert/lunarlander/4720242/policies/final/model.zip
-  OUTROOT=/scratch/marzii/imitation_runs/noisy_demos/lunarlander/expert_4720242
+  OUTROOT=/scratch/marzii/imitation_runs/demos/noisy_demos/lunarlander/expert_4720242
 else
   POLICY=/scratch/marzii/imitation_runs/expert/lunarlander/4615187/policies/final/model.zip
-  OUTROOT=/scratch/marzii/imitation_runs/noisy_demos/lunarlander/expert_4615187
+  OUTROOT=/scratch/marzii/imitation_runs/demos/noisy_demos/lunarlander/expert_4615187
 fi
 [[ -f "$POLICY" ]] || { echo "ERROR: policy not found: $POLICY" 1>&2; exit 1; }
 mkdir -p "$OUTROOT"

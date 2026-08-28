@@ -32,7 +32,7 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 
 
 GAIL_ROOT = "/scratch/marzii/imitation_runs/gail/lunarlander"
-SLURM_LOG_ROOT = "/home/marzii/IRL3/imitation/output/slurm_logs/gail/lunarlander"
+SLURM_LOG_ROOT = "/scratch/marzii/imitation_runs/_slurm_logs/gail/lunarlander"
 # Map expert slurm job ID -> expert timestamp dir (for legacy path matching)
 EXPERT_ID_TO_TS = {
     "4615153": "20260404_161428_cd10a3",

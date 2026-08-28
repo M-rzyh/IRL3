@@ -31,7 +31,7 @@ else
 fi
 [[ -d "$DEMO" ]] || { echo "MISSING demo dir: $DEMO" 1>&2; exit 1; }
 
-INDEX=/home/marzii/IRL3/experiments/gail_blind_human_b5_$(date +%Y-%m-%d).csv
+INDEX=/home/marzii/IRL3/experiments/GAIL/gail_blind_human_b5_$(date +%Y-%m-%d).csv
 mkdir -p "$(dirname "$INDEX")"
 [[ -f "$INDEX" ]] || echo "condition_id,N,blank_pct,seed,slurm_job_id,demo_path,status" > "$INDEX"
 

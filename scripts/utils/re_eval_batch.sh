@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=re-eval-gail
 #SBATCH --account=aip-mtaylor3
-#SBATCH --output=/home/marzii/IRL3/imitation/output/slurm_logs/re_eval_%A_%a.out
-#SBATCH --error=/home/marzii/IRL3/imitation/output/slurm_logs/re_eval_%A_%a.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/re_eval_%A_%a.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/re_eval_%A_%a.err
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
@@ -32,5 +32,5 @@ echo "Task $TASK_ID: processing lines $START..$END of $TOTAL ($N_EPS eps each)"
 
 while IFS= read -r RUN_DIR; do
   [ -z "$RUN_DIR" ] && continue
-  python /home/marzii/IRL3/scripts/re_eval_run.py "$RUN_DIR" --n-eps $N_EPS
+  python /home/marzii/IRL3/scripts/utils/re_eval_run.py "$RUN_DIR" --n-eps $N_EPS
 done < <(sed -n "${START},${END}p" "$RUN_LIST")

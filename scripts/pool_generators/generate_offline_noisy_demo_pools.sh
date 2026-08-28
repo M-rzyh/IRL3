@@ -12,8 +12,8 @@ INPUT=/scratch/marzii/imitation_runs/expert/lunarlander/4615187/rollouts/perfram
 # INPUTFS=/scratch/marzii/imitation_runs/expert/lunarlander/4720242/rollouts/perframe_demos_150
 OPTIMAL=/scratch/marzii/imitation_runs/expert/lunarlander/4615187/policies/final/model.zip
 # OPTIMAL_FS=/scratch/marzii/imitation_runs/expert/lunarlander/4720242/policies/final/model.zip
-OUTROOT=/scratch/marzii/imitation_runs/noisy_demos/lunarlander/expert_4615187
-# OUTROOT_FS=/scratch/marzii/imitation_runs/noisy_demos/lunarlander/expert_4720242
+OUTROOT=/scratch/marzii/imitation_runs/demos/noisy_demos/lunarlander/expert_4615187
+# OUTROOT_FS=/scratch/marzii/imitation_runs/demos/noisy_demos/lunarlander/expert_4720242
 
 mkdir -p "$OUTROOT"
 

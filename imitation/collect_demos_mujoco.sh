@@ -1,16 +1,16 @@
 #!/bin/bash
 #SBATCH --job-name=collect-demos-walker-mujoco
 #SBATCH --account=aip-mtaylor3
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=01:00:00
-#SBATCH --output=output/slurm_logs/%x_%j.out
-#SBATCH --error=output/slurm_logs/%x_%j.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/demos/mujoco/%x_%j.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/demos/mujoco/%x_%j.err
 
 set -euo pipefail
 
-mkdir -p output/slurm_logs
+mkdir -p /scratch/marzii/imitation_runs/_slurm_logs/demos/mujoco
 
 # ---- required env setup ----
 module --force purge

@@ -1,16 +1,16 @@
 #!/bin/bash
 #SBATCH --job-name=lunarlander-ppo
 #SBATCH --account=aip-mtaylor3
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=01:30:00
-#SBATCH --output=output/slurm_logs/expert/lunarlander/%x_%j.out
-#SBATCH --error=output/slurm_logs/expert/lunarlander/%x_%j.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/expert/lunarlander/%x_%j.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/expert/lunarlander/%x_%j.err
 
 set -euo pipefail
 
-mkdir -p output/slurm_logs/expert/lunarlander
+mkdir -p /scratch/marzii/imitation_runs/_slurm_logs/expert/lunarlander
 
 # ---- required env setup ----
 module --force purge

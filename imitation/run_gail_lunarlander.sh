@@ -1,16 +1,16 @@
 #!/bin/bash
 #SBATCH --job-name=gail-lunarlander
 #SBATCH --account=aip-mtaylor3
-#SBATCH --output=output/slurm_logs/gail/lunarlander/%x_%j.out
-#SBATCH --error=output/slurm_logs/gail/lunarlander/%x_%j.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/gail/lunarlander/%x_%j.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/gail/lunarlander/%x_%j.err
 #SBATCH --time=00:30:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=8G
 
 set -euo pipefail
 
-mkdir -p output/slurm_logs/gail/lunarlander
+mkdir -p /scratch/marzii/imitation_runs/_slurm_logs/gail/lunarlander
 
 # ---- required env setup ----
 module --force purge
@@ -62,10 +62,13 @@ SHUFFLE_SEED=${SHUFFLE_SEED:-$SEED}  # defaults to SEED; set separately to get d
 # NOTE: must match the env used to generate the demos (use FS10 expert demos with FRAME_SKIP=1)
 FRAME_SKIP=${FRAME_SKIP:-0}
 ENV_GYM_ID="LunarLander-v2"
-ENV_MAX_EP_STEPS=400
+# Episode cap for GAIL training + eval. Overridable (default 400 = original behavior, so every
+# existing run is unchanged). Set ENV_MAX_EP_STEPS=1000 to match the human demo collection cap
+# and the PT pipeline (used for the cap-sensitivity rerun).
+ENV_MAX_EP_STEPS=${ENV_MAX_EP_STEPS:-400}
 if [[ "$FRAME_SKIP" == "1" ]]; then
   ENV_GYM_ID="LunarLander-v2-FS10"
-  ENV_MAX_EP_STEPS=40
+  ENV_MAX_EP_STEPS=40   # FS10 always caps at 40 (10x action repeat); overrides the above
 fi
 
 DEMO_NOTE=${DEMO_NOTE:-}  # optional free-text annotation about how demos were prepared
@@ -103,8 +106,11 @@ PY
   DEMO_PATH="$SHUFFLED_DIR"
 fi
 
-# ---- run GAIL ----
-python train_adversarial_launcher.py gail \
+# ---- run adversarial IL (GAIL by default; ALGO=airl runs AIRL — same pipeline, the reward net
+#      auto-switches to BasicShapedRewardNet, i.e. the disentangled reward) ----
+ALGO=${ALGO:-gail}
+echo "algorithm: $ALGO"
+python train_adversarial_launcher.py "$ALGO" \
   with lunar_lander \
   demonstrations.source="$DEMO_SOURCE" \
   demonstrations.path="$DEMO_PATH" \

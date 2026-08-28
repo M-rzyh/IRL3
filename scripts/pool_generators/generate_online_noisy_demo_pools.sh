@@ -28,9 +28,9 @@
 # FORCE=0        1 = regenerate even if the output dir already exists (default: skip existing)
 #
 # OUTPUT (kept where the existing pools + submitters expect them):
-#   coin_uniform + nonFS -> noisy_demos_online_nonFS/lunarlander/expert_4615187/n100_p{P}_s{S}
-#   coin_uniform + FS    -> noisy_demos_online_FS/lunarlander/expert_4720242/n100_p{P}_s{S}
-#   other variant (nonFS)-> noise_variants/demos/${MODE}/n100_p{P}_s{S}
+#   coin_uniform + nonFS -> demos/noisy_demos_online_nonFS/lunarlander/expert_4615187/n100_p{P}_s{S}
+#   coin_uniform + FS    -> demos/noisy_demos_online_FS/lunarlander/expert_4720242/n100_p{P}_s{S}
+#   other variant (nonFS)-> demos/noise_variants/demos/${MODE}/n100_p{P}_s{S}
 #
 # EXAMPLES (run from the repo root):
 #   sbatch scripts/pool_generators/generate_online_noisy_demo_pools.sh            # nonFS coin_uniform
@@ -59,16 +59,16 @@ esac
 if [[ "$FS" == "1" ]]; then
   [[ "$MODE" == "coin_uniform" ]] || { echo "ERROR: FS=1 supports only MODE=coin_uniform (variants are nonFS-only)." 1>&2; exit 1; }
   POLICY=/scratch/marzii/imitation_runs/expert/lunarlander/4720242/policies/final/model.zip
-  OUTROOT=/scratch/marzii/imitation_runs/noisy_demos_online_FS/lunarlander/expert_4720242
+  OUTROOT=/scratch/marzii/imitation_runs/demos/noisy_demos_online_FS/lunarlander/expert_4720242
   SCRIPT=$ORIG; MODEARG=()
 else
   POLICY=/scratch/marzii/imitation_runs/expert/lunarlander/4615187/policies/final/model.zip
   if [[ "$MODE" == "coin_uniform" ]]; then
     # original collector reproduces the EXACT existing nonFS pools (byte-identical default)
-    OUTROOT=/scratch/marzii/imitation_runs/noisy_demos_online_nonFS/lunarlander/expert_4615187
+    OUTROOT=/scratch/marzii/imitation_runs/demos/noisy_demos_online_nonFS/lunarlander/expert_4615187
     SCRIPT=$ORIG; MODEARG=()
   else
-    OUTROOT=/scratch/marzii/imitation_runs/noise_variants/demos/${MODE}
+    OUTROOT=/scratch/marzii/imitation_runs/demos/noise_variants/demos/${MODE}
     SCRIPT=$VARIANTS; MODEARG=(--noise-mode "$MODE")
   fi
 fi

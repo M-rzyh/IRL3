@@ -40,6 +40,19 @@ they'd use and submit *nothing* if any is missing (`CHECK=1` = check only). All 
 1. | `submit_gail_blind_expert.sh` | Train on **blind-expert** demos, **N=50**, blank% {0,25,50,75} × seeds. ⚠️ index **truncates**. |
 2. | `submit_gail_blind_human_b5.sh` | Train on **blind-human** demos (b=5), **N=50** — `bash blind/submit_gail_blind_human_b5.sh <blank_pct> <seed_lo> <seed_hi>`. Appends. |
 
+### `lander_vanish/` — lander-vanishing axis
+Same block schedule as frame blanking, but only the **lander** is removed and replaced by the
+terrain behind it; ground, pad and flags stay visible. Human arm only, low budget (**N=15**
+demos against PT's N=100 preferences).
+
+| Script | Use it to… |
+1. | `submit_gail_vanish_human.sh` | Train on vanish-human demos (b=5, fps 20), **N=15** — `bash lander_vanish/submit_gail_vanish_human.sh <pct> <seed_lo> <seed_hi>`. Pre-flights the demo dir and refuses to submit anything if it is missing or short; `CHECK=1` checks only. Appends. |
+
+Collect the demos with `imitation/collect_human_demos_lunarlander.sh`:
+`DIFFICULTY=vanish PCT={25,50,75} BLOCK_LEN=5 FPS=20 FLAG_TARGET=15`. The **0% baseline needs
+its own fps-20 collection** (`DIFFICULTY=none` + `OUTPUT_DIR=.../vanish_p0`) — the older clean
+sessions were played at fps 25, and reusing them would confound the baseline with game speed.
+
 ## Utilities
 | Script | Use it to… |
 1. | `rebuild_gail_noise_N15_index.sh` | Rebuild a truncated N15 noise index from job logs (`DEMO_NOTE`) + the clean-rows side-file. Idempotent; re-run after the sweep finishes. |

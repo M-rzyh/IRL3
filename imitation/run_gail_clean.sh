@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=gail-walker2d
 #SBATCH --account=aip-mtaylor3
-#SBATCH --output=output/gail/walker_dmc/%j.out
-#SBATCH --error=output/gail/walker_dmc/%j.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/gail/walker_dmc/%j.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/gail/walker_dmc/%j.err
 #SBATCH --time=02:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 
@@ -50,7 +50,7 @@ export PYTHONPATH="/home/marzii/IRL2/imitation:/scratch/marzii/imitation_runs:${
 python /scratch/marzii/imitation_runs/run_gail_wrapper.py gail \
   with environment.gym_id=DMControl/Walker-walk-v0 \
        demonstrations.source=local \
-       demonstrations.path="/scratch/marzii/imitation_runs/demos_walker_dmc/steps_12000000/expert_job_4310732/expert_trajs_100.npz" \
+       demonstrations.path="/scratch/marzii/imitation_runs/demos/demos_walker_dmc/steps_12000000/expert_job_4310732/expert_trajs_100.npz" \
        demonstrations.n_expert_demos=5 \
        total_timesteps=5000000 \
        seed=0 \

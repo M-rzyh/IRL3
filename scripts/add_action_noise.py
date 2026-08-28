@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+## the offline noise injection: Exp 7
 """Make a noisy copy of a per-frame demo dataset by re-sampling actions.
 
 With probability `--noise-prob`, each action in each trajectory is replaced
@@ -10,7 +11,7 @@ noisy dataset where a == optimal_policy.predict(s).
 Usage:
     python add_action_noise.py \\
         --input  /scratch/marzii/imitation_runs/expert/lunarlander/4720242/rollouts/perframe_demos_150 \\
-        --output /scratch/marzii/imitation_runs/noisy_demos/lunarlander/expert_4720242/n100_p25_s0 \\
+        --output /scratch/marzii/imitation_runs/demos/noisy_demos/lunarlander/expert_4720242/n100_p25_s0 \\
         --noise-prob 0.25 \\
         --seed 0 \\
         --optimal-policy /scratch/marzii/imitation_runs/expert/lunarlander/4720242/policies/final/model.zip \\

@@ -18,7 +18,7 @@
 #   INDEX=         output CSV; empty = experiments/gail_grid_count{_FS}_${DATE}.csv
 #   CHECK=0        1 = pre-flight only (report, submit nothing)
 #
-# POOL: noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean (single pool, 150 eps).
+# POOL: demos/noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean (single pool, 150 eps).
 #       Each (N, seed) draws a different N-subset via SHUFFLE_SEED=seed. Make it with
 #       pool_generators/generate_clean_demo_pools.sh.
 #
@@ -40,9 +40,9 @@ RUNROOT=/scratch/marzii/imitation_runs
 case "$FS" in 0|1) ;; *) echo "ERROR: FS must be 0|1" 1>&2; exit 1;; esac
 EXPERT=$([[ "$FS" == "1" ]] && echo 4720242 || echo 4615187)
 FSTAG=$([[ "$FS" == "1" ]] && echo "_FS" || echo "")
-INDEX=${INDEX:-/home/marzii/IRL3/experiments/gail_grid_count${FSTAG}_${DATE}.csv}
+INDEX=${INDEX:-/home/marzii/IRL3/experiments/GAIL/gail_grid_count${FSTAG}_${DATE}.csv}
 
-CLEAN_POOL="$RUNROOT/noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean"
+CLEAN_POOL="$RUNROOT/demos/noisy_demos/lunarlander/expert_${EXPERT}/n100_p0_clean"
 
 # demo_batch_size: small N = few transitions, so it scales with N (128/512/1024).
 bs_for() {  # $1=N

@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=collect-demos-walker
 #SBATCH --account=aip-mtaylor3
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=00:30:00
-#SBATCH --output=output/collecting_demo/%j.out
-#SBATCH --error=output/collecting_demo/%j.err
+#SBATCH --output=/scratch/marzii/imitation_runs/_slurm_logs/demos/walker/%j.out
+#SBATCH --error=/scratch/marzii/imitation_runs/_slurm_logs/demos/walker/%j.err
 
 set -euo pipefail
 mkdir -p "output/collecting_demo"
@@ -51,8 +51,8 @@ export DEVICE=cuda
 
 # demo output location
 # [LABEL: COLLECT_DEMOS_DMC] Changed output directory to reflect DM Control Walker environment
-export OUT_DIR="$SCRATCH/imitation_runs/demos_walker_dmc/steps_${TOTAL_STEPS}/expert_job_${EXPERT_JOB_ID}"
-# [OLD_SETTING] export OUT_DIR="$SCRATCH/imitation_runs/demos_walker2d_v4/steps_${TOTAL_STEPS}/expert_job_${EXPERT_JOB_ID}"
+export OUT_DIR="$SCRATCH/imitation_runs/demos/demos_walker_dmc/steps_${TOTAL_STEPS}/expert_job_${EXPERT_JOB_ID}"
+# [OLD_SETTING] export OUT_DIR="$SCRATCH/imitation_runs/demos/demos_walker2d_v4/steps_${TOTAL_STEPS}/expert_job_${EXPERT_JOB_ID}"
 mkdir -p "$OUT_DIR"
 
 # optional: verify expert exists before running
