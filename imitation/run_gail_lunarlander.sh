@@ -84,11 +84,24 @@ if [[ -n "$DEMO_NOTE" ]]; then
   echo "Demo note:       $DEMO_NOTE"
 fi
 
-# Env-name-based output structure: imitation_runs/gail/<env_name>/<job_id>
+# ---- algorithm selection (must precede LOG_ROOT: each algo gets its own output tree) ----
+# GAIL by default; ALGO=airl runs AIRL. Same pipeline; the reward net auto-switches to
+# BasicShapedRewardNet (see reward.config_hook, which branches on the sacred command name).
+ALGO=${ALGO:-gail}
+echo "algorithm: $ALGO"
+
+# Output structure: imitation_runs/<ALGO_DIR>/<env_name>/<job_id>
+# GAIL keeps its historical lowercase "gail" tree untouched; AIRL gets its own "AIRL" tree so
+# the two never mix (they are different algorithms and were previously indistinguishable on disk).
 ENV_NAME="lunarlander"
-LOG_ROOT="/scratch/marzii/imitation_runs/gail"
+case "$ALGO" in
+  airl) ALGO_DIR="AIRL" ;;
+  *)    ALGO_DIR="$ALGO" ;;
+esac
+LOG_ROOT="/scratch/marzii/imitation_runs/$ALGO_DIR"
 RUN_DIR="$LOG_ROOT/$ENV_NAME/${SLURM_JOB_ID:-local}"
 mkdir -p "$RUN_DIR"
+echo "run dir:         $RUN_DIR"
 
 # ---- optional: shuffle demos reproducibly (using SEED) ----
 if [[ "$SHUFFLE" == "1" ]]; then
@@ -106,10 +119,27 @@ PY
   DEMO_PATH="$SHUFFLED_DIR"
 fi
 
-# ---- run adversarial IL (GAIL by default; ALGO=airl runs AIRL — same pipeline, the reward net
-#      auto-switches to BasicShapedRewardNet, i.e. the disentangled reward) ----
-ALGO=${ALGO:-gail}
-echo "algorithm: $ALGO"
+# ---- optional Weights & Biases logging (USE_WANDB=1). Default 0 keeps the command byte-identical
+#      to every previous run. Needs `wandb login` once (writes ~/.netrc); compute nodes reach
+#      wandb through the prolog-injected http_proxy=http://squid:3128. TensorBoard is written
+#      either way, so nothing is lost if wandb is off. ----
+USE_WANDB=${USE_WANDB:-0}
+LOG_FMT="['tensorboard','stdout']"
+WANDB_ARGS=()
+if [[ "$USE_WANDB" == "1" ]]; then
+  LOG_FMT="['tensorboard','stdout','wandb']"
+  WANDB_PROJECT=${WANDB_PROJECT:-gail-lunarlander}
+  # run name becomes <prefix>-<gym_id>-seed<seed>; RUN_TAG defaults to the demo dir name so
+  # runs from different rankings/subsets are distinguishable in the UI.
+  RUN_TAG=${RUN_TAG:-$(basename "$DEMO_PATH")}
+  WANDB_ARGS=(
+    logging.wandb.wandb_name_prefix="${ALGO}-${RUN_TAG}"
+    logging.wandb.wandb_tag="$RUN_TAG"
+    logging.wandb.wandb_kwargs.project="$WANDB_PROJECT"
+  )
+  echo "wandb: ON  project=$WANDB_PROJECT  tag=$RUN_TAG"
+fi
+
 python train_adversarial_launcher.py "$ALGO" \
   with lunar_lander \
   demonstrations.source="$DEMO_SOURCE" \
@@ -122,7 +152,8 @@ python train_adversarial_launcher.py "$ALGO" \
   environment.max_episode_steps=$ENV_MAX_EP_STEPS \
   seed=$SEED \
   logging.log_dir="$RUN_DIR" \
-  logging.log_format_strs="['tensorboard','stdout']"
+  logging.log_format_strs="$LOG_FMT" \
+  ${WANDB_ARGS[@]+"${WANDB_ARGS[@]}"}
 
 # ---- post-training evaluation: 50 rollouts + action alignment ----
 # Optional: skip with SKIP_EVAL=1.

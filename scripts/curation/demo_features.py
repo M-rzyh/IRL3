@@ -24,6 +24,19 @@ GOOD_DIR = {
     # traj_features(). These are the features that actually measure landing softness.
     "contact_vy": -1, "contact_vx": -1, "contact_angle": -1,
     "action_divergence": -1,                                # cross-demo per-state action disagreement
+    "action_entropy": -1,                                   # entropy of the SAME neighbour set
+    # Action-consistency / multimodality metrics (all lower = more consistent). Same 6-D
+    # pool-normalized state as action_divergence; only the NEIGHBOUR SET differs:
+    #   self_*        -> neighbours from this demo ONLY  (within-person consistency)
+    #   cross_demo_*  -> the k closest DISTINCT other demos, one vote each (across-person)
+    # *_divergence asks "was THIS action unusual?"; *_entropy ignores the taken action and asks
+    # "is this state ambiguous?".  Recorded only -- NOT in ACTIVE_FEATS, so ranking is unchanged.
+    "self_action_divergence": -1,
+    "self_action_entropy": -1,
+    "cross_demo_action_divergence": -1,
+    "cross_demo_action_entropy": -1,
+    "action_divergence_xy": -1,
+    "action_entropy_xy": -1,
 }
 FEATURES = list(GOOD_DIR)
 # ACTIVE_FEATS = the ON features (user-selected) used for ranking + curation filtering.
@@ -105,22 +118,51 @@ def traj_features(ep):
     )
 
 
-def add_action_divergence(rows, ds, k=15):
-    """Per-demo action divergence: for each state in a demo, how much its action disagrees with
-    what OTHER demos do at nearby states (kNN in normalized 6-D continuous state). Higher = this
-    demo is inconsistent with the rest -> exactly the realizability signal that breaks BC/GAIL."""
-    from scipy.spatial import cKDTree
+def _flatten(ds):
+    """All demos -> one flat table: S (n,6) states, A (n,) actions, DID (n,) source demo id.
+    Only the first 6 obs dims are kept (x, y, vx, vy, angle, angvel); the two leg-contact flags
+    are dropped because a 0/1 flag would dominate a Euclidean distance. obs has T+1 rows and
+    acts has T, so the final state (which has no action) is dropped."""
     S, A, DID = [], [], []
-    # print(S, A, DID)
-    # print(f"Computing action divergence: {rows}, {len(ds)} demos, {k} neighbors")
     for i in range(len(ds)):
         obs = np.asarray(ds[i]["obs"], float); acts = np.asarray(ds[i]["acts"]).astype(int)
         S.append(obs[:len(acts), :6]); A.append(acts); DID.append(np.full(len(acts), i))
-    S = np.vstack(S) # Combines all demo state arrays vertically into one large array.
-    A = np.concatenate(A)
-    DID = np.concatenate(DID)
-    
-    Sn = (S - S.mean(0)) / (S.std(0) + 1e-8)
+    return np.vstack(S), np.concatenate(A), np.concatenate(DID)
+
+
+def _normalize(S):
+    """z-score each dim over the whole pool, so no dimension dominates the distance."""
+    return (S - S.mean(0)) / (S.std(0) + 1e-8)
+
+
+def _n_actions(A, n_actions=None):
+    return max(2, int(A.max()) + 1) if n_actions is None else max(2, int(n_actions))
+
+
+def _norm_entropy(acts, na):
+    """Normalized entropy of an action multiset: -sum p log p / log(na), in [0, 1]."""
+    if len(acts) == 0:
+        return 0.0
+    p = np.bincount(acts, minlength=na).astype(float)
+    p = p[p > 0] / len(acts)                       # drop zero-probability actions (no 0*log0)
+    return float(-(p * np.log(p)).sum() / np.log(na))
+
+
+def add_action_divergence(rows, ds, k=15, n_actions=None):
+    """Per-demo action divergence: for each state in a demo, how much its action disagrees with
+    what OTHER demos do at nearby states (kNN in normalized 6-D continuous state). Higher = this
+    demo is inconsistent with the rest -> exactly the realizability signal that breaks BC/GAIL.
+
+    NOTE: neighbours are picked by distance alone, so ONE nearby demo can supply all k votes.
+    See add_cross_demo_distinct_metrics for the one-vote-per-demo variant.
+
+    Also writes `action_entropy`: the normalized entropy of the SAME neighbour set. The divergence
+    asks "was a_t unusual here?"; the entropy ignores a_t and asks "is this state ambiguous?"."""
+    from scipy.spatial import cKDTree
+    S, A, DID = _flatten(ds)
+    Sn = _normalize(S)
+    na = _n_actions(A, n_actions)
+    ent = np.zeros(len(S))
     tree = cKDTree(Sn)
     kq = min(k + 40, len(Sn))
     _, idx = tree.query(Sn, k=kq)
@@ -129,12 +171,126 @@ def add_action_divergence(rows, ds, k=15):
         neigh = idx[i][1:]                                   # drop self
         other = neigh[DID[neigh] != DID[i]][:k]              # only OTHER demos' states
         div[i] = float(np.mean(A[other] != A[i])) if len(other) else 0.0
+        ent[i] = _norm_entropy(A[other], na)                 # same neighbours, ignores A[i]
     for r in rows:
         m = DID == r["demo_id"]
         r["action_divergence"] = float(div[m].mean()) if m.any() else 0.0
+        r["action_entropy"] = float(ent[m].mean()) if m.any() else 0.0
+
+def add_action_divergence_X_Y(rows, ds, k=15, n_actions=None):
+    """Per-demo action divergence: for each state in a demo, how much its action disagrees with
+    what OTHER demos do at nearby states (kNN in normalized 6-D continuous state). Higher = this
+    demo is inconsistent with the rest -> exactly the realizability signal that breaks BC/GAIL.
+
+    NOTE: neighbours are picked by distance alone, so ONE nearby demo can supply all k votes.
+    See add_cross_demo_distinct_metrics for the one-vote-per-demo variant.
+
+    Also writes `action_entropy`: the normalized entropy of the SAME neighbour set. The divergence
+    asks "was a_t unusual here?"; the entropy ignores a_t and asks "is this state ambiguous?"."""
+    from scipy.spatial import cKDTree
+    S, A, DID = [], [], []
+    for i in range(len(ds)):
+        obs = np.asarray(ds[i]["obs"], float); acts = np.asarray(ds[i]["acts"]).astype(int)
+        S.append(obs[:len(acts), :2]); A.append(acts); DID.append(np.full(len(acts), i))
+    S,A,DID = np.vstack(S), np.concatenate(A), np.concatenate(DID)
+    Sn = _normalize(S)
+    na = _n_actions(A, n_actions)
+    ent = np.zeros(len(S))
+    tree = cKDTree(Sn)
+    kq = min(k + 40, len(Sn))
+    _, idx = tree.query(Sn, k=kq)
+    div = np.empty(len(S))
+    for i in range(len(S)):
+        neigh = idx[i][1:]                                   # drop self
+        other = neigh[DID[neigh] != DID[i]][:k]              # only OTHER demos' states
+        div[i] = float(np.mean(A[other] != A[i])) if len(other) else 0.0
+        ent[i] = _norm_entropy(A[other], na)                 # same neighbours, ignores A[i]
+    for r in rows:
+        m = DID == r["demo_id"]
+        r["action_divergence_xy"] = float(div[m].mean()) if m.any() else 0.0
+        r["action_entropy_xy"] = float(ent[m].mean()) if m.any() else 0.0
+
+def add_self_action_metrics(rows, ds, k=15, n_actions=None):
+    """WITHIN-person consistency. For each state, look only at the k nearest states from the SAME
+    demo (self excluded) and ask:
+      self_action_divergence -- fraction of those neighbours whose action differs from a_t, i.e.
+                                1 - P_self(a_t | s_t). "Is this demonstrator's current action
+                                unusual compared with what they themselves usually do here?"
+      self_action_entropy    -- normalized entropy of the neighbours' action distribution. Ignores
+                                a_t entirely: "does this demonstrator use several different
+                                actions around this state?"
+    Both averaged over the demo's own states."""
+    from scipy.spatial import cKDTree
+    S, A, DID = _flatten(ds)
+    Sn = _normalize(S)                       # pool-level normalization, same metric space
+    na = _n_actions(A, n_actions)
+    per = {}
+    for j in np.unique(DID):
+        m = np.flatnonzero(DID == j)
+        Sj, Aj = Sn[m], A[m]
+        kk = min(k, len(m) - 1)              # a demo can offer at most len-1 self-neighbours
+        if kk < 1:                           # single-state demo -> no neighbours at all
+            per[int(j)] = (0.0, 0.0); continue
+        _, idx = cKDTree(Sj).query(Sj, k=kk + 1, workers=-1)
+        idx = np.atleast_2d(idx)[:, 1:]      # drop self (always the nearest, distance 0)
+        dv = np.mean(Aj[idx] != Aj[:, None], axis=1)
+        en = np.array([_norm_entropy(Aj[row], na) for row in idx])
+        per[int(j)] = (float(dv.mean()), float(en.mean()))
+    for r in rows:
+        d, e = per.get(int(r["demo_id"]), (0.0, 0.0))
+        r["self_action_divergence"] = d
+        r["self_action_entropy"] = e
 
 
-def load_rows(session):
+def add_cross_demo_distinct_metrics(rows, ds, k=15, n_actions=None):
+    """ACROSS-person consistency, one vote per demo. For each state we take the k closest DISTINCT
+    other demos, each contributing only its single nearest state, and ask:
+      cross_demo_action_divergence -- fraction of those demos whose action differs from a_t.
+      cross_demo_action_entropy    -- normalized entropy of their action distribution (ignores
+                                      a_t): "do different people disagree around this state?"
+
+    Unlike add_action_divergence, a single spatially-adjacent demo cannot dominate the vote.
+    Computed EXACTLY: for every demo j we 1-NN-query all states against demo j's own tree and keep
+    a running best-k. The k+40 window used by add_action_divergence is NOT usable here -- on the
+    699-demo pool it yields a median of only 7 distinct demos."""
+    from scipy.spatial import cKDTree
+    S, A, DID = _flatten(ds)
+    Sn = _normalize(S)
+    na = _n_actions(A, n_actions)
+    n, demos = len(Sn), np.unique(DID)
+    kk = min(k, len(demos) - 1)              # at most (n_demos - 1) distinct OTHER demos
+    if kk < 1:
+        for r in rows:
+            r["cross_demo_action_divergence"] = 0.0
+            r["cross_demo_action_entropy"] = 0.0
+        return
+    best_d = np.full((n, kk), np.inf)
+    best_a = np.full((n, kk), -1, dtype=np.int64)
+    for j in demos:
+        m = DID == j
+        d1, i1 = cKDTree(Sn[m]).query(Sn, k=1, workers=-1)     # nearest state IN demo j, for all
+        d1 = np.asarray(d1, float).copy(); a1 = A[m][np.asarray(i1).ravel()]
+        d1[m] = np.inf                                         # a demo never votes on itself
+        cd = np.column_stack([best_d, d1])                     # (n, kk+1)
+        ca = np.column_stack([best_a, a1])
+        o = np.argsort(cd, axis=1, kind="stable")[:, :kk]      # keep the kk closest demos
+        best_d = np.take_along_axis(cd, o, axis=1)
+        best_a = np.take_along_axis(ca, o, axis=1)
+    valid = np.isfinite(best_d)                                # guards pools with < kk+1 demos
+    dv = np.zeros(n); en = np.zeros(n)
+    for i in range(n):
+        acts = best_a[i][valid[i]]
+        if len(acts) == 0:
+            continue
+        dv[i] = float(np.mean(acts != A[i]))
+        en[i] = _norm_entropy(acts, na)
+    for r in rows:
+        m = DID == r["demo_id"]
+        r["cross_demo_action_divergence"] = float(dv[m].mean()) if m.any() else 0.0
+        r["cross_demo_action_entropy"] = float(en[m].mean()) if m.any() else 0.0
+
+
+def load_rows(session, self_k=15, cross_k=15, div_k=15):
     import datasets; datasets.disable_progress_bar()
     ds = datasets.load_from_disk(session)
     rows = []
@@ -142,7 +298,10 @@ def load_rows(session):
         f = traj_features(ds[i]); f["demo_id"] = i
         f["return"] = f.pop("return_")   # csv-friendly name
         rows.append(f)
-    add_action_divergence(rows, ds)      # cross-demo feature, needs the whole set
+    add_action_divergence(rows, ds, k=div_k)   # cross-demo feature, needs the whole set
+    add_action_divergence_X_Y(rows, ds)      # cross-demo feature, needs the whole set
+    add_self_action_metrics(rows, ds, k=self_k)              # within-person consistency
+    add_cross_demo_distinct_metrics(rows, ds, k=cross_k)     # across-person, one vote per demo
     add_ranking(rows)                     # composite goodness rank across RANK_FEATS
     return rows
 
@@ -203,8 +362,13 @@ def main():
     ap.add_argument("--session", required=True); ap.add_argument("--out_csv")
     ap.add_argument("--plot_dir", required=True); ap.add_argument("--filter", default="")
     ap.add_argument("--pct", type=float, default=50)
+    ap.add_argument("--self_k", type=int, default=15, help="neighbours for the self_* metrics")
+    ap.add_argument("--cross_k", type=int, default=15,
+                    help="distinct other demos for the cross_demo_* metrics")
+    ap.add_argument("--div_k", type=int, default=15,
+                    help="kNN neighbours for action_divergence / action_entropy")
     a = ap.parse_args()
-    rows = load_rows(a.session)
+    rows = load_rows(a.session, self_k=a.self_k, cross_k=a.cross_k, div_k=a.div_k)
     print(f"{len(rows)} trajectories; outcomes:",
           {o: sum(r['outcome'] == o for r in rows) for o in ("landed", "crashed", "timeout")})
     if a.out_csv:

@@ -38,11 +38,35 @@ SEED=${SEED:-0}
 ENV_GYM_ID=${ENV_GYM_ID:-"LunarLander-v2"}
 ENV_MAX_EP_STEPS=${ENV_MAX_EP_STEPS:-1000}   # match PT + human collection cap
 N_EVAL_EPISODES=${N_EVAL_EPISODES:-50}
+# 0 = use the first N demos of DEMO_PATH (unchanged default, every previous run).
+# 1 = shuffle DEMO_PATH first, exactly as run_gail_lunarlander.sh:105-120 does, then
+#     take the first N. With SHUFFLE_SEED=SEED this reproduces the Human GAIL H6
+#     subsets bit-for-bit (verified: ds.shuffle(seed=S) on session_3 gives the same
+#     200-demo order as every H6 shuffled_demos artifact, seeds 0-4, datasets 4.6.0).
+SHUFFLE=${SHUFFLE:-0}
+SHUFFLE_SEED=${SHUFFLE_SEED:-$SEED}
 
 LOG_ROOT="/scratch/marzii/imitation_runs/bc"
 RUN_DIR="$LOG_ROOT/lunarlander/${SLURM_JOB_ID:-local}"
 mkdir -p "$RUN_DIR"
 echo "DEMO_PATH=$DEMO_PATH  N_DEMOS=$N_DEMOS  SEED=$SEED  cap=$ENV_MAX_EP_STEPS  RUN_DIR=$RUN_DIR"
+echo "Shuffle demos:   $SHUFFLE  (shuffle_seed=$SHUFFLE_SEED)"
+
+# ---- optional: shuffle demos reproducibly (same procedure as the GAIL script) ----
+if [[ "$SHUFFLE" == "1" ]]; then
+  SHUFFLED_DIR="$RUN_DIR/shuffled_demos"
+  echo "Shuffling demos from $DEMO_PATH -> $SHUFFLED_DIR (shuffle_seed=$SHUFFLE_SEED)"
+  python - "$DEMO_PATH" "$SHUFFLED_DIR" "$SHUFFLE_SEED" <<'PY'
+import sys
+from datasets import load_from_disk
+src, dst, seed = sys.argv[1], sys.argv[2], int(sys.argv[3])
+ds = load_from_disk(src)
+ds = ds.shuffle(seed=seed)
+ds.save_to_disk(dst)
+print(f"Shuffled {len(ds)} trajectories, saved to {dst}")
+PY
+  DEMO_PATH="$SHUFFLED_DIR"
+fi
 
 # ---- BC training (library's `bc` command; same demo/env ingredients as GAIL) ----
 python bc/train_imitation_launcher.py bc with lunar_lander \

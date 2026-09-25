@@ -187,7 +187,9 @@ def train_adversarial(
             try:
                 _compute_stats = _compute_timer.stop()
                 _extra = {
-                    "algo": "gail",
+                    # Derive from the algorithm actually used -- this used to be
+                    # hardcoded to "gail", which silently mislabelled every AIRL run.
+                    "algo": algo_cls.__name__.lower(),
                     "total_timesteps": int(total_timesteps),
                 }
                 _compute_path = str(log_dir / "compute_time.json")

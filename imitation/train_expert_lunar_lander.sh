@@ -22,12 +22,14 @@ source /scratch/marzii/miniforge3/etc/profile.d/conda.sh
 conda activate /scratch/marzii/envs/imitation-gail
 hash -r
 
+# Ensure we use the local repo (with lunar_lander config) instead of the installed package.
+# MUST come before the `import imitation` check below: under `set -e` the check aborts the job
+# in ~1s otherwise. Same fix as run_gail_lunarlander.sh (WORKLOG 2026-06-30).
+export PYTHONPATH="/home/marzii/IRL3/imitation/src:${PYTHONPATH:-}"
+
 which python
 python -c "import sys; print(sys.executable)"
 python -c "import imitation; print('imitation', imitation.__version__)"
-
-# Ensure we use the local repo (with lunar_lander config) instead of the installed package
-export PYTHONPATH="/home/marzii/IRL3/imitation/src:${PYTHONPATH:-}"
 
 # ---- quick sanity check ----
 python - <<'PY'
@@ -58,7 +60,9 @@ fi
 # FRAME_SKIP=1: use LunarLander-v2-FS10 (policy decides every 10 env steps; 40 decisions/ep)
 FRAME_SKIP=${FRAME_SKIP:-0}
 ENV_GYM_ID="LunarLander-v2"
-ENV_MAX_EP_STEPS=400
+# Overridable episode cap. Default 400 = every previous expert run, unchanged.
+# Set ENV_MAX_EP_STEPS=1000 to match the BC warm-start / PT pipelines.
+ENV_MAX_EP_STEPS=${ENV_MAX_EP_STEPS:-400}
 VIDEO_ENV_ID="LunarLander-v2"
 if [[ "$FRAME_SKIP" == "1" ]]; then
   ENV_GYM_ID="LunarLander-v2-FS10"
@@ -67,13 +71,26 @@ if [[ "$FRAME_SKIP" == "1" ]]; then
 fi
 echo "Frame skip: $FRAME_SKIP  (gym_id=$ENV_GYM_ID, max_ep_steps=$ENV_MAX_EP_STEPS)"
 
+# Optional explicit seed. Unset = sacred draws a random one (what runs 4615153/70/87 did,
+# so their behaviour is unchanged); set SEED=<n> for a reproducible sweep.
+SEED=${SEED:-}
+SEED_ARGS=()
+if [[ -n "$SEED" ]]; then
+  SEED_ARGS=("seed=$SEED")
+fi
+echo "Seed:       ${SEED:-<random>}"
+
 # pass job id so python can create OUTDIR = base/ENV_NAME/JOB_ID
 export JOB_ID="${SLURM_JOB_ID}"
 
-# Env-name-based structure: imitation_runs/expert/<env_name>/<job_id>
+# Env-name-based structure: imitation_runs/<root>/<env_name>/<job_id>
+# LOG_ROOT is overridable so a PPO *baseline* sweep can be kept out of expert/,
+# which is provenance for the demo pools (4615187 in particular is referenced by
+# explicit path from the demo collectors and from run_gail_lunarlander.sh OPTIMAL_REF).
 ENV_NAME="lunarlander"
-LOG_ROOT="/scratch/marzii/imitation_runs/expert"
+LOG_ROOT=${LOG_ROOT:-"/scratch/marzii/imitation_runs/expert"}
 RUN_DIR="$LOG_ROOT/$ENV_NAME/$JOB_ID"
+echo "Log root:   $LOG_ROOT"
 mkdir -p "$RUN_DIR"
 
 python train_rl_launcher.py \
@@ -88,6 +105,7 @@ python train_rl_launcher.py \
   policy_save_interval=50000 \
   logging.log_dir="$RUN_DIR" \
   logging.log_format_strs="['tensorboard','stdout']" \
+  ${SEED_ARGS[@]+"${SEED_ARGS[@]}"} \
   "${EXTRA_ENV_ARGS[@]}"
 
 # ---- record 5 expert episodes as video ----
